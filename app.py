@@ -7,7 +7,7 @@ import time
 import uuid
 import hashlib
 from datetime import datetime
-import random
+from copy import deepcopy
 
 # make sure we can import from utils/
 sys.path.append(os.path.join(os.path.dirname(__file__), "utils"))
@@ -186,67 +186,131 @@ def calc_edge(prediction: float, line_value: float):
 # ─────────────────────────────
 # Session State Helper Functions
 # ─────────────────────────────
+def _get_session_state():
+    """
+    Safely return the current Streamlit session_state object or None if
+    Streamlit has not finished initialising it yet.
+    """
+    try:
+        return st.session_state  # type: ignore[attr-defined]
+    except Exception:
+        return None
+
+
 def safe_session_state_get(key, default_value=None):
     """
     Safely get a value from session state, handling initialization errors.
-    
-    Args:
-        key: Session state key
-        default_value: Default value if key doesn't exist or session state isn't ready
-    
-    Returns:
-        Value from session state or default_value
     """
+    session_state = _get_session_state()
+    if session_state is None:
+        return deepcopy(default_value)
+
     try:
-        # Check if we're in a Streamlit context and session_state is available
-        if not hasattr(st, 'session_state'):
-            return default_value
-        
-        # Use getattr with default to avoid triggering initialization
-        session_state = getattr(st, 'session_state', None)
-        if session_state is None:
-            return default_value
-        
-        # Try to check if key exists using get() method which is safer
-        try:
-            return session_state.get(key, default_value)
-        except (AttributeError, TypeError):
-            # Fallback to direct access if get() not available
-            try:
-                if hasattr(session_state, '__contains__') and key in session_state:
-                    return session_state[key]
-            except:
-                pass
-            return default_value
+        return session_state.get(key, deepcopy(default_value))
     except Exception:
-        # Catch all exceptions to prevent crashes (including SessionInfo errors)
-        return default_value
+        return deepcopy(default_value)
 
 
 def safe_session_state_set(key, value):
     """
     Safely set a value in session state, handling initialization errors.
-    
-    Args:
-        key: Session state key
-        value: Value to set
     """
+    session_state = _get_session_state()
+    if session_state is None:
+        return
+
     try:
-        # Check if we're in a Streamlit context and session_state is available
-        if not hasattr(st, 'session_state'):
-            return
-        
-        # Use getattr with default to avoid triggering initialization
-        session_state = getattr(st, 'session_state', None)
-        if session_state is None:
-            return
-        
-        # Set the value
         session_state[key] = value
     except Exception:
-        # Catch all exceptions to prevent crashes (including SessionInfo errors)
         # Session state not ready, skip silently
         pass
+
+
+def safe_session_state_init(key, default_value):
+    """
+    Initialise a session state key with a default value if it does not
+    already exist, returning the stored value (or a deepcopy of the
+    default when session state is unavailable).
+    """
+    session_state = _get_session_state()
+    if session_state is None:
+        return deepcopy(default_value)
+
+    if key not in session_state:
+        session_state[key] = deepcopy(default_value)
+
+    return session_state[key]
+
+
+SESSION_DEFAULTS = {
+    "adjusted_lines": {},
+    "manual_lines": {},
+    "hit_rates": {},
+    "stable_ids": {},
+}
+
+
+def initialize_session_state_defaults():
+    """
+    Ensure that all root session state containers we rely on exist
+    before any widgets attempt to mutate them.
+    """
+    for key, default in SESSION_DEFAULTS.items():
+        safe_session_state_init(key, default)
+
+
+def make_player_stat_key(player_identifier, stat_code):
+    return f"{player_identifier}:{stat_code}"
+
+
+def get_adjusted_line_value(player_identifier, stat_code, default_value=None):
+    adjusted_lines = safe_session_state_init("adjusted_lines", {})
+    key = make_player_stat_key(player_identifier, stat_code)
+    if default_value is not None and key not in adjusted_lines:
+        adjusted_lines[key] = default_value
+    return adjusted_lines.get(key, default_value)
+
+
+def set_adjusted_line_value(player_identifier, stat_code, value):
+    adjusted_lines = safe_session_state_init("adjusted_lines", {})
+    key = make_player_stat_key(player_identifier, stat_code)
+    adjusted_lines[key] = value
+
+
+def reset_adjusted_line_value(player_identifier, stat_code):
+    adjusted_lines = safe_session_state_init("adjusted_lines", {})
+    key = make_player_stat_key(player_identifier, stat_code)
+    if key in adjusted_lines:
+        del adjusted_lines[key]
+
+
+def get_manual_line_value(player_identifier, stat_code, default_value=0.0):
+    manual_lines = safe_session_state_init("manual_lines", {})
+    key = make_player_stat_key(player_identifier, stat_code)
+    if key not in manual_lines:
+        manual_lines[key] = default_value
+    return manual_lines[key]
+
+
+def set_manual_line_value(player_identifier, stat_code, value):
+    manual_lines = safe_session_state_init("manual_lines", {})
+    key = make_player_stat_key(player_identifier, stat_code)
+    manual_lines[key] = value
+
+
+def get_or_create_stable_id(player_identifier, stat_code):
+    stable_ids = safe_session_state_init("stable_ids", {})
+    key = make_player_stat_key(player_identifier, stat_code)
+    if key not in stable_ids:
+        stable_ids[key] = str(uuid.uuid4())[:12]
+    return stable_ids[key]
+
+
+def cache_hit_rate(player_identifier, stat_code, value):
+    hit_rates = safe_session_state_init("hit_rates", {})
+    key = make_player_stat_key(player_identifier, stat_code)
+    hit_rates[key] = value
+
 
 
 # ─────────────────────────────
@@ -279,12 +343,11 @@ def generate_unique_button_key(player_id, stat_code, team_abbrev, button_type, r
         components.append(str(render_index))
     
     # Join components and create a hash for shorter, deterministic key
-    composite_key = "_".join(components)
+    composite_key = "::".join(components)
     key_hash = hashlib.md5(composite_key.encode()).hexdigest()[:12]
 
-    
-    # Return a readable but unique key
-    return f"{button_type}_{key_hash}_{random.randint(1, 1000000)}"
+    # Return a readable but unique key (deterministic per component set)
+    return f"{button_type}_{key_hash}"
 
 
 def render_player_detail_body(pdata, cur_season, prev_season, render_index=None):
@@ -793,27 +856,21 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
 
     # Get player_id from pdata (required for unique keys)
     player_id = pdata.get("player_id", None)
-    if player_id is None:
+    if player_id is None or pd.isna(player_id):
         # Fallback: use a hash of player_name + team as player_id
         fallback_id = hashlib.md5(f"{player_name}_{team_abbrev}".encode()).hexdigest()[:8]
         player_id = f"fallback_{fallback_id}"
-    
-    # Session state key for adjusted line (unique per player/stat)
-    # Use player_id instead of player_name for consistency
-    line_key = f"adjusted_line_{player_id}_{stat_code}"
-    hit_rate_key = f"adjusted_hit_rate_{player_id}_{stat_code}"
+
+    player_identifier = str(player_id)
     
     # Generate unique button keys using the robust key generation function
-    decrease_key = generate_unique_button_key(player_id, stat_code, team_abbrev, "decrease", render_index)
-    increase_key = generate_unique_button_key(player_id, stat_code, team_abbrev, "increase", render_index)
-    reset_key = generate_unique_button_key(player_id, stat_code, team_abbrev, "reset", render_index)
-    manual_key = generate_unique_button_key(player_id, stat_code, team_abbrev, "manual", render_index)
+    decrease_key = generate_unique_button_key(player_identifier, stat_code, team_abbrev, "decrease", render_index)
+    increase_key = generate_unique_button_key(player_identifier, stat_code, team_abbrev, "increase", render_index)
+    reset_key = generate_unique_button_key(player_identifier, stat_code, team_abbrev, "reset", render_index)
+    manual_key = generate_unique_button_key(player_identifier, stat_code, team_abbrev, "manual", render_index)
     
     # Initialize or get adjusted line from session state (safely)
-    current_line = safe_session_state_get(line_key, fd_line_val)
-    if current_line is None:
-        current_line = fd_line_val
-        safe_session_state_set(line_key, fd_line_val)
+    current_line = get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
     
     # Handle button clicks
     button_col1, button_col2, button_col3 = st.columns([1, 2, 1])
@@ -822,7 +879,10 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
         if st.button("➖", key=decrease_key, 
                     help="Decrease line by 0.5", use_container_width=True):
             if current_line is not None:
-                safe_session_state_set(line_key, current_line - 0.5)
+                new_value = current_line - 0.5
+                set_adjusted_line_value(player_identifier, stat_code, new_value)
+                if fd_line_val is None:
+                    set_manual_line_value(player_identifier, stat_code, new_value)
                 st.rerun()
     
     with button_col2:
@@ -837,33 +897,40 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
                 st.markdown(f"**Current Line:** **{current_line:.1f}**")
                 if current_line != fd_line_val:
                     if st.button("🔄 Reset", key=reset_key, use_container_width=True):
-                        safe_session_state_set(line_key, fd_line_val)
+                        if fd_line_val is not None:
+                            set_adjusted_line_value(player_identifier, stat_code, fd_line_val)
+                        else:
+                            reset_adjusted_line_value(player_identifier, stat_code)
+                            set_manual_line_value(player_identifier, stat_code, 0.0)
                         st.rerun()
     
     with button_col3:
         if st.button("➕", key=increase_key, 
                     help="Increase line by 0.5", use_container_width=True):
             if current_line is not None:
-                safe_session_state_set(line_key, current_line + 0.5)
+                new_value = current_line + 0.5
+                set_adjusted_line_value(player_identifier, stat_code, new_value)
+                if fd_line_val is None:
+                    set_manual_line_value(player_identifier, stat_code, new_value)
                 st.rerun()
     
     # Manual line input option (if no line available)
     if current_line is None and stat_code != "DD":
-        manual_state_key = f"manual_line_state_{player_id}_{stat_code}"
-        manual_default = safe_session_state_get(manual_state_key, 0.0)
-        
+        manual_default = get_manual_line_value(player_identifier, stat_code, 0.0)
+        manual_widget_key = f"manual_line_widget_{make_player_stat_key(player_identifier, stat_code)}"
         manual_line = st.number_input(
             "Enter line manually",
             min_value=0.0,
             value=manual_default,
             step=0.5,
-            key=manual_key + "_" + str(uuid.uuid4()),
+            key=manual_widget_key,
             help="Enter a custom line to calculate hit rate"
         )
-        if manual_line > 0 and manual_line != safe_session_state_get(line_key):
-            safe_session_state_set(line_key, manual_line)
-            current_line = manual_line
+        set_manual_line_value(player_identifier, stat_code, manual_line)
+        if manual_line > 0 and manual_line != current_line:
+            set_adjusted_line_value(player_identifier, stat_code, manual_line)
             st.rerun()
+        current_line = get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
     
     # Recalculate hit rate and edge based on current (adjusted) line
     if current_line is not None and stat_code != "DD":
@@ -873,7 +940,7 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
         adjusted_edge_str, adjusted_rec_text, adjusted_ou_short = calc_edge(prediction, current_line)
         
         # Store in session state (safely)
-        safe_session_state_set(hit_rate_key, adjusted_hit_rate)
+        cache_hit_rate(player_identifier, stat_code, adjusted_hit_rate)
     else:
         adjusted_hit_rate = hit_pct_val
         adjusted_edge_str = edge_str
@@ -1156,6 +1223,12 @@ No game is selected yet — choose one in the sidebar to start.
         team_abbrev = prow["team_abbrev"]
         opponent_abbrev = away_team if team_abbrev == home_team else home_team
 
+        if pd.isna(pid):
+            fallback_id = hashlib.md5(f"{player_name}_{team_abbrev}".encode()).hexdigest()[:8]
+            player_identifier = f"fallback_{fallback_id}"
+        else:
+            player_identifier = str(pid)
+
         # position
         player_pos = get_player_position(pid, season=prev_season)
 
@@ -1245,11 +1318,7 @@ No game is selected yet — choose one in the sidebar to start.
         player_display_name = f"⭐️ {player_name}" if is_starter else player_name
         
         # Get or initialize adjusted line from session state (safely)
-        line_key_table = f"adjusted_line_{player_name}_{stat_code}"
-        current_line_table = safe_session_state_get(line_key_table, fd_line_val)
-        if current_line_table is None:
-            current_line_table = fd_line_val
-            safe_session_state_set(line_key_table, fd_line_val)
+        current_line_table = get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
         
         # Recalculate hit rate based on adjusted line
         if current_line_table is not None and stat_code != "DD":
@@ -1265,6 +1334,7 @@ No game is selected yet — choose one in the sidebar to start.
         table_row_data = {
             "player_name": player_name,
             "player_display_name": player_display_name,
+            "player_identifier": player_identifier,
             "team_pos": f"{team_abbrev} · {player_pos}",
             "proj": proj_display,
             "fd_line_val": fd_line_val,
@@ -1280,11 +1350,7 @@ No game is selected yet — choose one in the sidebar to start.
 
         # Generate a stable unique ID for this player/stat combination
         # Store it in session state so it persists across renders (safely)
-        stable_id_key = f"stable_id_{pid}_{stat_code}"
-        stable_unique_id = safe_session_state_get(stable_id_key, None)
-        if stable_unique_id is None:
-            stable_unique_id = str(uuid.uuid4())[:12]
-            safe_session_state_set(stable_id_key, stable_unique_id)
+        stable_unique_id = get_or_create_stable_id(player_identifier, stat_code)
 
         # prepare data for expander
         pdata = {
@@ -1300,7 +1366,7 @@ No game is selected yet — choose one in the sidebar to start.
             "prediction": pred_val,
             "stat_code": stat_code,
             "stat_display": stat_display,
-            "player_id": pid,  # Add player_id for unique keys
+            "player_id": player_identifier,  # Sanitised player identifier for session keys
             "stable_unique_id": stable_unique_id,  # Stable ID for button keys
 
             # sportsbook stuff to show in detail view
@@ -1311,240 +1377,230 @@ No game is selected yet — choose one in the sidebar to start.
         }
         player_payloads.append(pdata)
 
-        # re-render interactive table
-        with table_placeholder.container():
-            # Table header
-            st.markdown("""
-            <style>
-            .player-table-row {
-                padding: 8px;
-                border-bottom: 1px solid #e0e0e0;
-            }
-            </style>
-            """, unsafe_allow_html=True)
-            
-            # Create header
-            header_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
-            with header_cols[0]:
-                st.markdown("**Player**")
-            with header_cols[1]:
-                st.markdown("**Team/Pos**")
-            with header_cols[2]:
-                st.markdown("**Proj**")
-            with header_cols[3]:
-                st.markdown("**Line**")
-            with header_cols[4]:
-                st.markdown("**O/U**")
-            with header_cols[5]:
-                st.markdown("**Hit%**")
-            with header_cols[6]:
-                st.markdown("**Opp Def**")
-            
-            st.markdown("---")
-            
-            # Render each row with interactive controls
-            for row_data in table_rows:
-                row_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
-                
-                with row_cols[0]:
-                    st.write(row_data["player_display_name"])
-                
-                with row_cols[1]:
-                    st.write(row_data["team_pos"])
-                
-                with row_cols[2]:
-                    st.write(row_data["proj"])
-                
-                with row_cols[3]:
-                    if row_data["stat_code"] == "DD":
-                        st.write("—")
-                    else:
-                        line_key = f"adjusted_line_{row_data['player_name']}_{row_data['stat_code']}"
-                        current_line = row_data["current_line"]
-                        
-                        if current_line is not None:
-                            # Line adjustment buttons
-                            line_btn_cols = st.columns([1, 2, 1])
-                            with line_btn_cols[0]:
-                                if st.button("➖", key=f"table_dec_{row_data['player_name']}_{row_data['stat_code']}", 
-                                           help="Decrease by 0.5"):
-                                    safe_session_state_set(line_key, current_line - 0.5)
-                                    st.rerun()
-                            
-                            with line_btn_cols[1]:
-                                st.write(f"**{current_line:.1f}**")
-                                if current_line != row_data["fd_line_val"] and row_data["fd_line_val"] is not None:
-                                    st.caption(f"({row_data['fd_line_val']:.1f})")
-                            
-                            with line_btn_cols[2]:
-                                if st.button("➕", key=f"table_inc_{row_data['player_name']}_{row_data['stat_code']}", 
-                                           help="Increase by 0.5"):
-                                    safe_session_state_set(line_key, current_line + 0.5)
-                                    st.rerun()
-                        else:
-                            st.write("—")
-                
-                with row_cols[4]:
-                    st.write(row_data["ou_short"])
-                
-                with row_cols[5]:
-                    hit_rate = row_data["hit_rate"]
-                    if hit_rate is not None:
-                        hit_color = "🟢" if hit_rate >= 50 else "🔴" if hit_rate < 30 else "🟡"
-                        st.write(f"{hit_color} **{hit_rate:.0f}%**")
-                    else:
-                        st.write("—")
-                
-                with row_cols[6]:
-                    st.write(row_data["opp_def"])
-
-        # re-render ALL expanders so far
-        # Use a set to track rendered player/stat combinations to prevent duplicates
-        rendered_combinations = set()
-        
-        with expanders_placeholder.container():
-            for idx, info in enumerate(player_payloads):
-                # Create a unique identifier for this player/stat combination
-                player_id_check = info.get("player_id", None)
-                stat_code_check = info.get("stat_code", "")
-                
-                if player_id_check is None:
-                    # Skip if no player_id (shouldn't happen, but safety check)
-                    continue
-                
-                # Create a composite key to check for duplicates
-                combo_key = (player_id_check, stat_code_check)
-                
-                # Skip if we've already rendered this combination
-                if combo_key in rendered_combinations:
-                    continue
-                
-                # Mark as rendered
-                rendered_combinations.add(combo_key)
-                
-                # Check if this player is a starter
-                roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
-                player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty else False
-                
-                # Create expander title (no key parameter needed - Streamlit handles uniqueness)
-                expander_title = f"{'⭐️ ' if player_is_starter else ''}{info['player_name']} ({info['team_abbrev']} · {info['player_pos']})"
-                
-                with st.expander(expander_title, expanded=False):
-                    # Pass render_index to ensure button keys are unique
-                    render_player_detail_body(info, cur_season, prev_season, render_index=idx)
-
         # status line
         status_placeholder.write(
             f"Loaded {len(table_rows)}/{total_players} players..."
         )
 
-        # tiny delay so UI visibly streams
-        time.sleep(0.05)
+    # Render table and expanders once after data has been gathered
+    with table_placeholder.container():
+        st.markdown("""
+        <style>
+        .player-table-row {
+            padding: 8px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        header_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
+        with header_cols[0]:
+            st.markdown("**Player**")
+        with header_cols[1]:
+            st.markdown("**Team/Pos**")
+        with header_cols[2]:
+            st.markdown("**Proj**")
+        with header_cols[3]:
+            st.markdown("**Line**")
+        with header_cols[4]:
+            st.markdown("**O/U**")
+        with header_cols[5]:
+            st.markdown("**Hit%**")
+        with header_cols[6]:
+            st.markdown("**Opp Def**")
+
+        st.markdown("---")
+
+        for row_data in table_rows:
+            row_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
+
+            with row_cols[0]:
+                st.write(row_data["player_display_name"])
+
+            with row_cols[1]:
+                st.write(row_data["team_pos"])
+
+            with row_cols[2]:
+                st.write(row_data["proj"])
+
+            with row_cols[3]:
+                if row_data["stat_code"] == "DD":
+                    st.write("—")
+                else:
+                    player_identifier = row_data["player_identifier"]
+                    current_line = row_data["current_line"]
+
+                    if current_line is not None:
+                        line_btn_cols = st.columns([1, 2, 1])
+                        with line_btn_cols[0]:
+                            btn_key = f"table_dec_{player_identifier}_{row_data['stat_code']}"
+                            if st.button("➖", key=btn_key,
+                                         help="Decrease by 0.5"):
+                                set_adjusted_line_value(player_identifier, row_data['stat_code'], current_line - 0.5)
+                                st.rerun()
+
+                        with line_btn_cols[1]:
+                            st.write(f"**{current_line:.1f}**")
+                            if current_line != row_data["fd_line_val"] and row_data["fd_line_val"] is not None:
+                                st.caption(f"({row_data['fd_line_val']:.1f})")
+
+                        with line_btn_cols[2]:
+                            btn_key_inc = f"table_inc_{player_identifier}_{row_data['stat_code']}"
+                            if st.button("➕", key=btn_key_inc,
+                                         help="Increase by 0.5"):
+                                set_adjusted_line_value(player_identifier, row_data['stat_code'], current_line + 0.5)
+                                st.rerun()
+                    else:
+                        st.write("—")
+
+            with row_cols[4]:
+                st.write(row_data["ou_short"])
+
+            with row_cols[5]:
+                hit_rate = row_data["hit_rate"]
+                if hit_rate is not None:
+                    hit_color = "🟢" if hit_rate >= 50 else "🔴" if hit_rate < 30 else "🟡"
+                    st.write(f"{hit_color} **{hit_rate:.0f}%**")
+                else:
+                    st.write("—")
+
+            with row_cols[6]:
+                st.write(row_data["opp_def"])
+
+    rendered_combinations = set()
+    with expanders_placeholder.container():
+        for idx, info in enumerate(player_payloads):
+            player_id_check = info.get("player_id", None)
+            stat_code_check = info.get("stat_code", "")
+
+            if player_id_check is None:
+                continue
+
+            combo_key = (player_id_check, stat_code_check)
+            if combo_key in rendered_combinations:
+                continue
+
+            rendered_combinations.add(combo_key)
+
+            roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
+            player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty else False
+
+            expander_title = f"{'⭐️ ' if player_is_starter else ''}{info['player_name']} ({info['team_abbrev']} · {info['player_pos']})"
+
+            with st.expander(expander_title, expanded=False):
+                render_player_detail_body(info, cur_season, prev_season, render_index=idx)
 
     # final status
     status_placeholder.success("✅ Done.")
 
 
-# ─────────────────────────────
-# Sidebar Controls
-# ─────────────────────────────
-st.sidebar.header("⚙️ Settings")
+def main():
+    initialize_session_state_defaults()
 
-# Cache stats block
-with st.sidebar.expander("💾 Cache Stats"):
-    cache_stats = get_cache_stats()
-    st.write(f"**Players cached:** {cache_stats.get('total_players', 0)}")
-    st.write(f"**Games cached:** {cache_stats.get('total_games', 0):,}")
-    st.write(f"**DB Size:** {cache_stats.get('db_size_mb', 0):.1f} MB")
+    # ─────────────────────────────
+    # Sidebar Controls
+    # ─────────────────────────────
+    st.sidebar.header("⚙️ Settings")
 
-    if st.button("🗑️ Clear Old Seasons"):
-        clear_old_seasons([current_season, prior_season])
-        st.success("Old seasons cleared!")
-        st.rerun()
+    # Cache stats block
+    with st.sidebar.expander("💾 Cache Stats"):
+        cache_stats = get_cache_stats()
+        st.write(f"**Players cached:** {cache_stats.get('total_players', 0)}")
+        st.write(f"**Games cached:** {cache_stats.get('total_games', 0):,}")
+        st.write(f"**DB Size:** {cache_stats.get('db_size_mb', 0):.1f} MB")
 
-# Upcoming games dropdown with a default "Select" option
-st.sidebar.subheader("📅 Select Upcoming Game")
+        if st.button("🗑️ Clear Old Seasons"):
+            clear_old_seasons([current_season, prior_season])
+            st.success("Old seasons cleared!")
+            st.rerun()
 
-upcoming_games = get_upcoming_games(days=7)
-selected_game = None
-game_map = {}
+    # Upcoming games dropdown with a default "Select" option
+    st.sidebar.subheader("📅 Select Upcoming Game")
 
-if upcoming_games:
-    sidebar_options = ["-- Select a Game --"]
-    for g in upcoming_games:
-        # ex: "Sat, Oct 25 - CHI @ ORL (7:30 PM)"
-        date_disp = g.get("date_display", "")
-        tm = f" ({g['time_display']})" if g.get("time_display") else ""
-        label = f"{date_disp} - {g['away']} @ {g['home']}{tm}"
-        sidebar_options.append(label)
-        game_map[label] = g
+    upcoming_games = get_upcoming_games(days=7)
+    selected_game = None
+    game_map = {}
 
-    picked_label = st.sidebar.selectbox(
-        f"Upcoming games (next 3 days) - {len(upcoming_games)} found",
-        options=sidebar_options,
-        index=0,  # default to instruction line
+    if upcoming_games:
+        sidebar_options = ["-- Select a Game --"]
+        for g in upcoming_games:
+            # ex: "Sat, Oct 25 - CHI @ ORL (7:30 PM)"
+            date_disp = g.get("date_display", "")
+            tm = f" ({g['time_display']})" if g.get("time_display") else ""
+            label = f"{date_disp} - {g['away']} @ {g['home']}{tm}"
+            sidebar_options.append(label)
+            game_map[label] = g
+
+        picked_label = st.sidebar.selectbox(
+            f"Upcoming games (next 3 days) - {len(upcoming_games)} found",
+            options=sidebar_options,
+            index=0,  # default to instruction line
+        )
+
+        if picked_label != "-- Select a Game --":
+            selected_game = game_map[picked_label]
+            st.sidebar.info(
+                f"Matchup: {selected_game['away']} @ {selected_game['home']}"
+            )
+    else:
+        st.sidebar.warning("⚠️ No upcoming games in next 3 days.")
+        picked_label = None
+        selected_game = None
+
+    # Which stat to predict on the board
+    st.sidebar.subheader("📊 Stat to Project")
+    stat_display_list = list(STAT_OPTIONS.keys())
+    stat_display_choice = st.sidebar.selectbox(
+        "Choose stat to preview on the board",
+        options=stat_display_list,
+        index=0,
+    )
+    stat_code_choice = STAT_OPTIONS[stat_display_choice]
+
+    # Player filter toggle
+    st.sidebar.subheader("👥 Player Filter")
+    show_only_starters = st.sidebar.radio(
+        "Filter players",
+        options=["Show All Players", "Show Only Starters"],
+        index=0,
+        help="Filter to show only projected starters (⭐) or all players"
     )
 
-    if picked_label != "-- Select a Game --":
-        selected_game = game_map[picked_label]
-        st.sidebar.info(
-            f"Matchup: {selected_game['away']} @ {selected_game['home']}"
-        )
-else:
-    st.sidebar.warning("⚠️ No upcoming games in next 3 days.")
-    picked_label = None
-    selected_game = None
+    # Player search bar
+    st.sidebar.subheader("🔍 Search Player")
+    player_search_query = st.sidebar.text_input(
+        "Search by player name",
+        value="",
+        placeholder="Type player name...",
+        help="Filter players by name (case-insensitive)"
+    )
 
-# Which stat to predict on the board
-st.sidebar.subheader("📊 Stat to Project")
-stat_display_list = list(STAT_OPTIONS.keys())
-stat_display_choice = st.sidebar.selectbox(
-    "Choose stat to preview on the board",
-    options=stat_display_list,
-    index=0,
-)
-stat_code_choice = STAT_OPTIONS[stat_display_choice]
+    # ─────────────────────────────
+    # Main render call
+    # ─────────────────────────────
+    build_matchup_view(
+        selected_game=selected_game,
+        stat_code=stat_code_choice,
+        stat_display=stat_display_choice,
+        cur_season=current_season,
+        prev_season=prior_season,
+        model_obj=model,
+        show_only_starters=(show_only_starters == "Show Only Starters"),
+        player_search_query=player_search_query.strip() if player_search_query else "",
+    )
 
-# Player filter toggle
-st.sidebar.subheader("👥 Player Filter")
-show_only_starters = st.sidebar.radio(
-    "Filter players",
-    options=["Show All Players", "Show Only Starters"],
-    index=0,
-    help="Filter to show only projected starters (⭐) or all players"
-)
+    # footer
+    st.markdown("---")
+    st.markdown(
+        "**Data Sources:** NBA.com (via nba_api) | "
+        "**Model:** Enhanced Ridge Regression  \n"
+        "**Features:** Season blending, H2H history, opponent recent form, "
+        "positional defense  \n"
+        "**Sportsbook Lines:** FanDuel via The Odds API  \n"
+        "**Note:** Projections are informational only. "
+        "Always verify lines and context."
+    )
 
-# Player search bar
-st.sidebar.subheader("🔍 Search Player")
-player_search_query = st.sidebar.text_input(
-    "Search by player name",
-    value="",
-    placeholder="Type player name...",
-    help="Filter players by name (case-insensitive)"
-)
 
-# ─────────────────────────────
-# Main render call
-# ─────────────────────────────
-build_matchup_view(
-    selected_game=selected_game,
-    stat_code=stat_code_choice,
-    stat_display=stat_display_choice,
-    cur_season=current_season,
-    prev_season=prior_season,
-    model_obj=model,
-    show_only_starters=(show_only_starters == "Show Only Starters"),
-    player_search_query=player_search_query.strip() if player_search_query else "",
-)
-
-# footer
-st.markdown("---")
-st.markdown(
-    "**Data Sources:** NBA.com (via nba_api) | "
-    "**Model:** Enhanced Ridge Regression  \n"
-    "**Features:** Season blending, H2H history, opponent recent form, "
-    "positional defense  \n"
-    "**Sportsbook Lines:** FanDuel via The Odds API  \n"
-    "**Note:** Projections are informational only. "
-    "Always verify lines and context."
-)
+if __name__ == "__main__":
+    main()

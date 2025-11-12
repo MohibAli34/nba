@@ -37,3 +37,4 @@ models/*.joblib
 
 # tar files
 *.tar.gz
+node_modules
