@@ -119,7 +119,10 @@ def defense_emoji(rank_num: int) -> str:
         return "🟡"
     else:
         return "🟢"
-
+def safe_get_adjusted_line(player_identifier, stat_code, fd_line_val):
+    if 'session_state' not in st.__dict__:
+        return fd_line_val  # fallback if Streamlit session not ready
+    return get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
 
 def calc_hit_rate(game_logs: pd.DataFrame, stat_col: str, line_value: float, window: int = 10):
     """
@@ -849,8 +852,9 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
 
     
     # Initialize or get adjusted line from session state (safely)
-    current_line = get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
-    
+   
+    current_line = safe_get_adjusted_line(player_identifier, stat_code, fd_line_val)
+
     # Handle button clicks
     button_col1, button_col2, button_col3 = st.columns([1, 2, 1])
 
