@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import time
 import requests
+from bs4 import BeautifulSoup
 
 from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import (
@@ -382,7 +383,7 @@ def get_todays_games():
 @st.cache_data(ttl=900)
 def get_upcoming_games(days: int = 7):
     """
-    Get upcoming NBA games (next X days) from the NBA schedule JSON dump.
+    Get upcoming NBA games (next 3 days: today, tomorrow, day after tomorrow) from the NBA schedule JSON dump.
     Falls back to get_todays_games() if that fails.
     """
     print("\n=== Fetching upcoming games from NBA schedule JSON ===")
@@ -402,8 +403,12 @@ def get_upcoming_games(days: int = 7):
             print("  No game dates found in schedule")
             return get_todays_games()
 
-        today = datetime.now()
-        end_date = today + timedelta(days=days)
+        today = datetime.now().date()
+        tomorrow = today + timedelta(days=1)
+        day_after_tomorrow = today + timedelta(days=2)
+        
+        # Only include games on these 3 dates
+        allowed_dates = [today, tomorrow, day_after_tomorrow]
 
         upcoming = []
 
@@ -417,10 +422,8 @@ def get_upcoming_games(days: int = 7):
             except:
                 continue
 
-            if (
-                game_date.date() < today.date()
-                or game_date.date() > end_date.date()
-            ):
+            # Filter: only include games on today, tomorrow, or day after tomorrow
+            if game_date.date() not in allowed_dates:
                 continue
 
             games = game_date_obj.get("games", [])
@@ -841,6 +844,137 @@ def scrape_defense_vs_position():
 
         traceback.print_exc()
         return pd.DataFrame()
+
+
+# -------------------------------------------------
+# Starter scraping from Rotowire
+# -------------------------------------------------
+@st.cache_data(ttl=1800)
+def scrape_rotowire_starters():
+    """
+    Scrape projected starters from Rotowire NBA lineups page.
+    Returns a dict mapping player names (normalized) to is_starter (bool).
+    """
+    try:
+        url = "https://www.rotowire.com/basketball/nba-lineups.php"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        
+        print("🔍 Scraping Rotowire for projected starters...")
+        time.sleep(1.0)  # Be respectful with rate limiting
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            print(f"❌ Failed to fetch Rotowire: HTTP {response.status_code}")
+            return {}
+        
+        soup = BeautifulSoup(response.text, "html.parser")
+        starters_dict = {}
+        
+        # Rotowire structure: lineup sections with .lineup.is-nba class
+        lineup_sections = soup.select(".lineup.is-nba, .lineup")
+        
+        for section in lineup_sections:
+            # Check if this is a starter section (usually first 5 players in lineup)
+            # Rotowire typically shows starters first, then bench
+            players = section.select(".lineup__player")
+            
+            # Look for player links/names
+            for idx, player_elem in enumerate(players):
+                # Try to find player name in <a> tag or direct text
+                player_link = player_elem.find("a")
+                if player_link:
+                    name = player_link.get_text(strip=True)
+                else:
+                    name = player_elem.get_text(strip=True)
+                
+                if not name or len(name) < 2:
+                    continue
+                
+                # First 5 players in a lineup are typically starters
+                # Also check for explicit starter indicators
+                parent_classes = " ".join(player_elem.get("class", [])).lower()
+                section_classes = " ".join(section.get("class", [])).lower()
+                
+                is_starter = (
+                    idx < 5 or  # First 5 players
+                    "starter" in parent_classes or
+                    "starter" in section_classes or
+                    "starting" in parent_classes or
+                    "starting" in section_classes
+                )
+                
+                name_normalized = " ".join(name.split())
+                # Only set if not already set (starters take precedence)
+                if name_normalized not in starters_dict or is_starter:
+                    starters_dict[name_normalized] = is_starter
+        
+        # Fallback: look for any lineup__player elements
+        if not starters_dict:
+            all_players = soup.select(".lineup__player")
+            for player_elem in all_players[:50]:  # Limit to first 50 to avoid noise
+                player_link = player_elem.find("a")
+                if player_link:
+                    name = player_link.get_text(strip=True)
+                else:
+                    name = player_elem.get_text(strip=True)
+                
+                if name and len(name) > 2:
+                    name_normalized = " ".join(name.split())
+                    # Default to starter if we can't determine (conservative approach)
+                    starters_dict[name_normalized] = True
+        
+        print(f"✅ Found {sum(1 for v in starters_dict.values() if v)} starters out of {len(starters_dict)} players")
+        return starters_dict
+        
+    except Exception as e:
+        print(f"❌ Error scraping Rotowire starters: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}
+
+
+def normalize_player_name(name):
+    """
+    Normalize player name for matching (remove extra spaces, handle common variations).
+    """
+    if not name:
+        return ""
+    # Remove extra whitespace
+    normalized = " ".join(str(name).split())
+    return normalized.strip()
+
+
+def is_player_starter(player_name, starters_dict):
+    """
+    Check if a player is a starter based on Rotowire data.
+    Returns True if starter, False if bench, None if unknown.
+    """
+    if not starters_dict:
+        return None
+    
+    normalized = normalize_player_name(player_name)
+    
+    # Direct match
+    if normalized in starters_dict:
+        return starters_dict[normalized]
+    
+    # Try partial matching (first name + last name variations)
+    name_parts = normalized.split()
+    if len(name_parts) >= 2:
+        # Try "First Last" and "Last, First" formats
+        first_last = f"{name_parts[0]} {name_parts[-1]}"
+        last_first = f"{name_parts[-1]}, {name_parts[0]}"
+        
+        for key in starters_dict:
+            key_normalized = normalize_player_name(key)
+            if first_last in key_normalized or key_normalized in first_last:
+                return starters_dict[key]
+            if last_first in key_normalized or key_normalized in last_first:
+                return starters_dict[key]
+    
+    return None
 
 
 # -------------------------------------------------
