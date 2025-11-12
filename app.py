@@ -845,10 +845,12 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
     # Generate globally unique widget keys using stable tokens
     # Generate stable keys for buttons and manual input
     base_key = f"{stable_id}_{stat_code}_{render_index or 0}"
-    decrease_key = f"{base_key}_dec"
-    increase_key = f"{base_key}_inc"
-    reset_key = f"{base_key}_reset"
-    manual_key = f"{base_key}_manual"
+    unique_suffix = uuid.uuid4().hex
+
+    decrease_key = f"detail_dec_{player_identifier}_{stat_code}_{render_index or 0}_{unique_suffix}"
+    increase_key = f"detail_inc_{player_identifier}_{stat_code}_{render_index or 0}_{uuid.uuid4().hex}"
+    reset_key    = f"detail_reset_{player_identifier}_{stat_code}_{render_index or 0}_{uuid.uuid4().hex}"
+    manual_key   = f"detail_manual_{player_identifier}_{stat_code}_{render_index or 0}_{uuid.uuid4().hex}"
 
     
     # Initialize or get adjusted line from session state (safely)
