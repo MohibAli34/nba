@@ -8,6 +8,7 @@ import time
 import uuid
 import hashlib
 import random
+import json
 from datetime import datetime
 from copy import deepcopy
 
@@ -529,10 +530,72 @@ def _get_widget_token(namespace: str) -> str:
 # ─────────────────────────────
 # Bet Sheet Functions
 # ─────────────────────────────
+def get_bet_sheet_file_path():
+    """Get the path to the bet sheet JSON file."""
+    return os.path.join(os.path.dirname(__file__), 'bet_sheet.json')
+
+
+def load_bet_sheet_from_file():
+    """Load bet sheet from JSON file."""
+    file_path = get_bet_sheet_file_path()
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('bet_sheet', []), data.get('bet_sheet_settings', {
+                    'allow_duplicates': False,
+                    'line_step_size': 0.5,
+                    'default_hit_rate_window': 'L10'
+                })
+        except Exception as e:
+            st.warning(f"Error loading bet sheet: {e}")
+            return [], {
+                'allow_duplicates': False,
+                'line_step_size': 0.5,
+                'default_hit_rate_window': 'L10'
+            }
+    return [], {
+        'allow_duplicates': False,
+        'line_step_size': 0.5,
+        'default_hit_rate_window': 'L10'
+    }
+
+
+def save_bet_sheet_to_file():
+    """Save bet sheet to JSON file."""
+    file_path = get_bet_sheet_file_path()
+    try:
+        # Convert bet sheet to JSON-serializable format
+        bet_sheet = st.session_state.get('bet_sheet', [])
+        bet_sheet_serializable = []
+        for bet in bet_sheet:
+            bet_copy = bet.copy()
+            # Convert timestamp to string if it's a pd.Timestamp
+            if 'timestamp' in bet_copy and isinstance(bet_copy['timestamp'], pd.Timestamp):
+                bet_copy['timestamp'] = bet_copy['timestamp'].isoformat()
+            bet_sheet_serializable.append(bet_copy)
+        
+        data = {
+            'bet_sheet': bet_sheet_serializable,
+            'bet_sheet_settings': st.session_state.get('bet_sheet_settings', {
+                'allow_duplicates': False,
+                'line_step_size': 0.5,
+                'default_hit_rate_window': 'L10'
+            })
+        }
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        st.error(f"Error saving bet sheet: {e}")
+
+
 def initialize_bet_sheet():
-    """Initialize bet sheet in session state if it doesn't exist."""
+    """Initialize bet sheet in session state if it doesn't exist, loading from file if available."""
     if 'bet_sheet' not in st.session_state:
-        st.session_state.bet_sheet = []
+        # Load from file on first initialization
+        bet_sheet, settings = load_bet_sheet_from_file()
+        st.session_state.bet_sheet = bet_sheet
+        st.session_state.bet_sheet_settings = settings
     if 'bet_sheet_settings' not in st.session_state:
         st.session_state.bet_sheet_settings = {
             'allow_duplicates': False,
@@ -607,6 +670,9 @@ def add_to_bet_sheet(player_data, stat_display, projection, line, edge,
     
     st.session_state.bet_sheet.append(bet_data)
     
+    # Save to file
+    save_bet_sheet_to_file()
+    
     # Toast message
     if line is not None:
         toast_msg = f"Added {player_data['player_name']} ({stat_display} {line:+.1f}) to Bet Sheet"
@@ -626,6 +692,8 @@ def remove_from_bet_sheet(bet_id):
     st.session_state.bet_sheet = [
         bet for bet in st.session_state.bet_sheet if bet.get('id') != bet_id
     ]
+    # Save to file
+    save_bet_sheet_to_file()
     st.rerun()
 
 
@@ -689,6 +757,8 @@ def update_bet_sheet_item(bet_id, updates, cur_season=None, prev_season=None):
             
             st.session_state.bet_sheet[i].update(updates)
             break
+    # Save to file
+    save_bet_sheet_to_file()
     st.rerun()
 
 
@@ -696,6 +766,8 @@ def clear_bet_sheet():
     """Clear all items from the bet sheet."""
     initialize_bet_sheet()
     st.session_state.bet_sheet = []
+    # Save to file
+    save_bet_sheet_to_file()
     st.session_state.bet_sheet_toast = {
         'type': 'success',
         'message': 'Bet sheet cleared'
@@ -1342,81 +1414,85 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
     # Get current step size
     step_size = get_line_step_size()
     
-    # Create a form for line adjustment with unique key
-    form_key = f"line_form_{base_key}_{unique_suffix}"
-    with st.form(key=form_key):
-        # Step size selector and reset button in the same row
-        col_step, col_reset = st.columns([2, 3])
-        
-        with col_step:
-            step_options = [0.5, 1.0, 2.0, 5.0]
-            try:
-                step_index = step_options.index(step_size)
-            except ValueError:
-                step_index = 0  # Default to 0.5 if step_size is not in options
-                step_size = 0.5
-                set_line_step_size(step_size)
-                
-            step_size = st.selectbox(
-                "Step Size",
-                step_options,
-                index=step_index,
-                key=f"step_select_{base_key}_{unique_suffix}",
-                help="Adjust the increment/decrement step size"
-            )
+    # Step size selector and reset button (outside form, like matchup board)
+    col_step, col_reset = st.columns([2, 3])
+    
+    with col_step:
+        step_options = [0.5, 1.0, 2.0, 5.0]
+        try:
+            step_index = step_options.index(step_size)
+        except ValueError:
+            step_index = 0  # Default to 0.5 if step_size is not in options
+            step_size = 0.5
             set_line_step_size(step_size)
-        
-        with col_reset:
-            if st.form_submit_button("🔄 Reset to Default", 
-                                  key=f"reset_btn_{base_key}_{unique_suffix}",
-                                  use_container_width=True):
-                reset_adjusted_line_value(player_identifier, stat_code, fd_line_val)
+            
+        step_size = st.selectbox(
+            "Step Size",
+            step_options,
+            index=step_index,
+            key=f"step_select_{base_key}_{unique_suffix}",
+            help="Adjust the increment/decrement step size"
+        )
+        set_line_step_size(step_size)
+    
+    with col_reset:
+        if st.button("🔄 Reset to Default", 
+                      key=f"reset_btn_{base_key}_{unique_suffix}",
+                      use_container_width=True):
+            reset_adjusted_line_value(player_identifier, stat_code, fd_line_val)
+            st.rerun()
+    
+    # Line adjustment controls - use buttons like matchup board (not form submit buttons)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    # Get current line value fresh for button handlers
+    current_line = get_adjusted_line_value(player_identifier, stat_code, fd_line_val or 0.0)
+    
+    with col1:
+        btn_key_dec = f"detail_dec_{base_key}_{unique_suffix}"
+        if st.button("➖", 
+                      key=btn_key_dec, 
+                      help=f"Decrease line by {step_size}", 
+                      use_container_width=True):
+            if current_line is not None:
+                new_value = round(current_line - step_size, 1)
+                set_adjusted_line_value(player_identifier, stat_code, new_value)
                 st.rerun()
-        
-        # Line adjustment controls
-        col1, col2, col3 = st.columns([1, 2, 1])
-        
-        with col1:
-            if st.form_submit_button("➖", 
-                                  key=f"decrease_btn_{base_key}_{unique_suffix}", 
-                                  help=f"Decrease line by {step_size}", 
-                                  use_container_width=True):
-                if current_line is not None:
-                    new_value = round(current_line - step_size, 1)
-                    set_adjusted_line_value(player_identifier, stat_code, new_value)
-                    st.rerun()
-        
-        with col2:
-            if stat_code == "DD":
-                st.markdown("**Line:** N/A (DD market)")
+    
+    with col2:
+        if stat_code == "DD":
+            st.markdown("**Line:** N/A (DD market)")
+        else:
+            if current_line is None:
+                st.markdown("**Line:** —")
+                st.caption("No line available. Enter manually below.")
             else:
-                if current_line is None:
-                    st.markdown("**Line:** —")
-                    st.caption("No line available. Enter manually below.")
-                else:
-                    # Use number input for direct editing
-                    new_line = st.number_input(
-                        "Current Line",
-                        min_value=0.0,
-                        max_value=100.0,
-                        step=step_size,
-                        value=float(current_line) if current_line is not None else 0.0,
-                        format="%.1f",
-                        key=f"line_input_{base_key}_{unique_suffix}",
-                        label_visibility="collapsed"
-                    )
-                    
-                    # Update if changed
-                    if new_line != current_line and current_line is not None:
-                        set_adjusted_line_value(player_identifier, stat_code, new_line)
-                        st.rerun()
-        
-        with col3:
-            if st.form_submit_button("➕", key=increase_key, help=f"Increase line by {step_size}", use_container_width=True):
-                if current_line is not None:
-                    new_value = round(current_line + step_size, 1)
-                    set_adjusted_line_value(player_identifier, stat_code, new_value)
+                # Display current line
+                st.write(f"**{current_line:.1f}**")
+                # Use number input for direct editing
+                new_line = st.number_input(
+                    "Current Line",
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=step_size,
+                    value=float(current_line) if current_line is not None else 0.0,
+                    format="%.1f",
+                    key=f"line_input_{base_key}_{unique_suffix}",
+                    label_visibility="collapsed"
+                )
+                
+                # Update if changed
+                if current_line is not None and abs(new_line - current_line) > 0.01:
+                    set_adjusted_line_value(player_identifier, stat_code, new_line)
                     st.rerun()
+    
+    with col3:
+        btn_key_inc = f"detail_inc_{base_key}_{unique_suffix}"
+        if st.button("➕", key=btn_key_inc, help=f"Increase line by {step_size}", use_container_width=True):
+            if current_line is not None:
+                new_value = round(current_line + step_size, 1)
+                set_adjusted_line_value(player_identifier, stat_code, new_value)
+                st.rerun()
 
 
     # Manual line input option (if no line available)
@@ -2128,6 +2204,9 @@ No game is selected yet — choose one in the sidebar to start.
                 
                 st.session_state.bet_sheet.append(bet_data)
                 
+                # Save to file
+                save_bet_sheet_to_file()
+                
                 current_count = len(st.session_state.bet_sheet)
                 
                 if current_line is not None:
@@ -2474,12 +2553,15 @@ def render_bet_item(bet, cur_season, prev_season):
     player_name = bet['player_name']
     team = bet['team_abbrev']
     stat_display = bet['stat_display']
-    line = bet.get('line')
-    projection = bet.get('projection', 0)
-    edge = bet.get('edge', '—')
-    stake = bet.get('stake')
-    hit_rates = bet.get('hit_rates', {})
-    hit_rate_window = bet.get('hit_rate_window', 'L10')
+    
+    # Get current line value fresh from bet sheet (in case it was updated)
+    current_bet = next((b for b in st.session_state.bet_sheet if b.get('id') == bet_id), bet)
+    line = current_bet.get('line')
+    projection = current_bet.get('projection', 0)
+    edge = current_bet.get('edge', '—')
+    stake = current_bet.get('stake')
+    hit_rates = current_bet.get('hit_rates', {})
+    hit_rate_window = current_bet.get('hit_rate_window', 'L10')
     
     # Get current hit rate
     current_hit_rate = hit_rates.get(hit_rate_window)
@@ -2495,7 +2577,7 @@ def render_bet_item(bet, cur_season, prev_season):
         with col_header1:
             st.markdown(f"**{player_name}** ({team})")
         with col_header2:
-            if st.button("🗑️", key=f"remove_{bet_id}_{int(time.time())}", help="Remove"):
+            if st.button("🗑️", key=f"remove_{bet_id}", help="Remove"):
                 remove_from_bet_sheet(bet_id)
         
         # Stat display
@@ -2504,45 +2586,56 @@ def render_bet_item(bet, cur_season, prev_season):
         # Line input/adjustment controls
         if line is None:
             # Show number input for entering line when line is None
+            manual_line_key = f"manual_line_{bet_id}"
             new_line = st.number_input(
                 "Enter Line",
                 min_value=0.0,
                 value=0.0,
                 step=0.5,
-                key=f"enter_line_{bet_id}",
+                key=manual_line_key,
                 label_visibility="visible"
             )
-            # Update when user enters a line (value > 0)
-            if new_line > 0:
-                update_bet_sheet_item(bet_id, {'line': new_line, 'line_source': 'manual'}, cur_season, prev_season)
+            # Add apply button for manual entry
+            if st.button("✅ Apply Line", key=f"apply_manual_{bet_id}", use_container_width=True):
+                if new_line > 0:
+                    update_bet_sheet_item(bet_id, {'line': new_line, 'line_source': 'manual'}, cur_season, prev_season)
         else:
-            # Show +/- adjustment buttons when line exists
+            # Show +/- adjustment buttons when line exists - match matchup board pattern
             col_line1, col_line2, col_line3 = st.columns([1, 2, 1])
             step_size = st.session_state.bet_sheet_settings.get('line_step_size', 0.5)
             
+            # Get current line value fresh for button handlers
+            current_line = next((b.get('line') for b in st.session_state.bet_sheet if b.get('id') == bet_id), line)
+            
             with col_line1:
-                if st.button("➖", key=f"dec_line_{bet_id}", use_container_width=True):
-                    new_line = round(line - step_size, 1)
-                    update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+                btn_key_dec = f"betsheet_dec_{bet_id}"
+                if st.button("➖", key=btn_key_dec, help=f"Decrease by {step_size}", use_container_width=True):
+                    if current_line is not None:
+                        new_line = round(current_line - step_size, 1)
+                        update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
             
             with col_line2:
-                # Use number_input for editable line display
+                # Display current line value
+                st.write(f"**{current_line:.1f}**" if current_line is not None else "—")
+                # Also allow manual editing via number input
                 edited_line = st.number_input(
                     "Line",
                     min_value=0.0,
-                    value=float(line),
+                    value=float(current_line) if current_line is not None else 0.0,
                     step=step_size,
                     key=f"edit_line_{bet_id}",
-                    label_visibility="visible"
+                    label_visibility="collapsed"
                 )
                 # Update if line changed
-                if abs(edited_line - line) > 0.01:
+                if current_line is not None and abs(edited_line - current_line) > 0.01:
                     update_bet_sheet_item(bet_id, {'line': edited_line}, cur_season, prev_season)
             
             with col_line3:
-                if st.button("➕", key=f"inc_line_{bet_id}", use_container_width=True):
-                    new_line = round(line + step_size, 1)
-                    update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+                btn_key_inc = f"betsheet_inc_{bet_id}"
+                if st.button("➕", key=btn_key_inc, help=f"Increase by {step_size}", use_container_width=True):
+                    if current_line is not None:
+                        new_line = round(current_line + step_size, 1)
+                        update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
         
         # Hit rate display
         if current_hit_rate is not None:
@@ -2595,32 +2688,42 @@ def render_bet_item_edit_modal(bet, cur_season, prev_season):
     # Player info (read-only)
     st.info(f"**{bet['player_name']}** ({bet['team_abbrev']}) - {bet['stat_display']}")
     
-    # Line editing with +/- buttons
+    # Line editing with +/- buttons - get fresh value like matchup board
     st.markdown("#### Line Adjustment")
-    current_line = bet.get('line', 0)
+    # Get current line value fresh from bet sheet
+    current_bet = next((b for b in st.session_state.bet_sheet if b.get('id') == bet_id), bet)
+    current_line = current_bet.get('line', 0)
     step_size = st.session_state.bet_sheet_settings.get('line_step_size', 0.5)
     
     col_line1, col_line2, col_line3 = st.columns([1, 2, 1])
     with col_line1:
-        if st.button("➖", key=f"modal_dec_{bet_id}", use_container_width=True):
-            new_line = round(current_line - step_size, 1)
-            update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+        btn_key_dec = f"modal_dec_{bet_id}"
+        if st.button("➖", key=btn_key_dec, help=f"Decrease by {step_size}", use_container_width=True):
+            if current_line is not None:
+                new_line = round(current_line - step_size, 1)
+                update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
     
     with col_line2:
+        # Display current line
+        if current_line is not None:
+            st.write(f"**{current_line:.1f}**")
         new_line_input = st.number_input(
             "Line",
             min_value=0.0,
             value=float(current_line) if current_line else 0.0,
             step=step_size,
-            key=f"modal_line_{bet_id}"
+            key=f"modal_line_{bet_id}",
+            label_visibility="collapsed"
         )
-        if new_line_input != current_line:
+        if current_line is not None and abs(new_line_input - current_line) > 0.01:
             update_bet_sheet_item(bet_id, {'line': new_line_input}, cur_season, prev_season)
     
     with col_line3:
-        if st.button("➕", key=f"modal_inc_{bet_id}", use_container_width=True):
-            new_line = round(current_line + step_size, 1)
-            update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+        btn_key_inc = f"modal_inc_{bet_id}"
+        if st.button("➕", key=btn_key_inc, help=f"Increase by {step_size}", use_container_width=True):
+            if current_line is not None:
+                new_line = round(current_line + step_size, 1)
+                update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
     
     # Hit rate window selection
     st.markdown("#### Hit Rate Window")
