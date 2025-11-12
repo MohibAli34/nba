@@ -312,42 +312,17 @@ def cache_hit_rate(player_identifier, stat_code, value):
     hit_rates[key] = value
 
 
-
-# ─────────────────────────────
-# Detailed Player View Renderer
-# (used inside each expander)
-# ─────────────────────────────
-def generate_unique_button_key(player_id, stat_code, team_abbrev, button_type, render_index=None):
+def _get_widget_token(namespace: str) -> str:
     """
-    Generate a deterministic, collision-free key for Streamlit buttons.
-    
-    Args:
-        player_id: Unique player identifier
-        stat_code: Stat type (PTS, REB, etc.)
-        team_abbrev: Team abbreviation
-        button_type: Type of button ('decrease', 'increase', 'reset', 'manual')
-        render_index: Optional render index to ensure uniqueness across multiple renders
-    
-    Returns:
-        A unique, deterministic key string
+    Return a stable UUID token for a widget namespace stored in session state.
+    Ensures widget keys remain globally unique across reruns while maintaining
+    consistency for the same logical widget.
     """
-    # Create a composite key from all identifiers
-    components = [
-        str(player_id),
-        str(stat_code),
-        str(team_abbrev),
-        str(button_type),
-    ]
-    
-    if render_index is not None:
-        components.append(str(render_index))
-    
-    # Join components and create a hash for shorter, deterministic key
-    composite_key = "::".join(components)
-    key_hash = hashlib.md5(composite_key.encode()).hexdigest()[:12]
+    tokens = safe_session_state_init("_widget_tokens", {})
+    if namespace not in tokens:
+        tokens[namespace] = str(uuid.uuid4())
+    return tokens[namespace]
 
-    # Return a readable but unique key (deterministic per component set)
-    return f"{button_type}_{key_hash}"
 
 
 def render_player_detail_body(pdata, cur_season, prev_season, render_index=None):
@@ -862,31 +837,31 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
         player_id = f"fallback_{fallback_id}"
 
     player_identifier = str(player_id)
-    
-    # Generate unique button keys using the robust key generation function
-    decrease_key = generate_unique_button_key(player_identifier, stat_code, team_abbrev, "decrease", render_index)
-    increase_key = generate_unique_button_key(player_identifier, stat_code, team_abbrev, "increase", render_index)
-    reset_key = generate_unique_button_key(player_identifier, stat_code, team_abbrev, "reset", render_index)
-    manual_key = generate_unique_button_key(player_identifier, stat_code, team_abbrev, "manual", render_index)
+    stable_id = get_or_create_stable_id(player_identifier, stat_code)
+
+    # Generate globally unique widget keys using stable tokens
+    unique_widget_prefix = uuid.uuid4().hex
+    decrease_key = f"detail_dec_{unique_widget_prefix}"
+    increase_key = f"detail_inc_{unique_widget_prefix}"
+    reset_key = f"detail_reset_{unique_widget_prefix}"
+    manual_key = f"detail_manual_{unique_widget_prefix}"
     
     # Initialize or get adjusted line from session state (safely)
     current_line = get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
     
     # Handle button clicks
     button_col1, button_col2, button_col3 = st.columns([1, 2, 1])
-    
+
     with button_col1:
-        if st.button("➖", key=decrease_key, 
-                    help="Decrease line by 0.5", use_container_width=True):
+        if st.button("➖", key=decrease_key, help="Decrease line by 0.5", use_container_width=True):
             if current_line is not None:
                 new_value = current_line - 0.5
                 set_adjusted_line_value(player_identifier, stat_code, new_value)
                 if fd_line_val is None:
                     set_manual_line_value(player_identifier, stat_code, new_value)
                 st.rerun()
-    
+
     with button_col2:
-        # Display current line with reset option
         if stat_code == "DD":
             st.markdown("**Line:** N/A (DD market)")
         else:
@@ -903,28 +878,26 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
                             reset_adjusted_line_value(player_identifier, stat_code)
                             set_manual_line_value(player_identifier, stat_code, 0.0)
                         st.rerun()
-    
+
     with button_col3:
-        if st.button("➕", key=increase_key, 
-                    help="Increase line by 0.5", use_container_width=True):
+        if st.button("➕", key=increase_key, help="Increase line by 0.5", use_container_width=True):
             if current_line is not None:
                 new_value = current_line + 0.5
                 set_adjusted_line_value(player_identifier, stat_code, new_value)
                 if fd_line_val is None:
                     set_manual_line_value(player_identifier, stat_code, new_value)
                 st.rerun()
-    
+
     # Manual line input option (if no line available)
     if current_line is None and stat_code != "DD":
         manual_default = get_manual_line_value(player_identifier, stat_code, 0.0)
-        manual_widget_key = f"manual_line_widget_{make_player_stat_key(player_identifier, stat_code)}"
         manual_line = st.number_input(
             "Enter line manually",
             min_value=0.0,
             value=manual_default,
             step=0.5,
-            key=manual_widget_key,
-            help="Enter a custom line to calculate hit rate"
+            key=manual_key,
+            help="Enter a custom line to calculate hit rate",
         )
         set_manual_line_value(player_identifier, stat_code, manual_line)
         if manual_line > 0 and manual_line != current_line:
@@ -1330,11 +1303,16 @@ No game is selected yet — choose one in the sidebar to start.
             adjusted_edge_str_table = edge_str
             adjusted_ou_short_table = ou_short
         
+        # Generate a stable unique ID for this player/stat combination
+        # Store it in session state so it persists across renders (safely)
+        stable_unique_id = get_or_create_stable_id(player_identifier, stat_code)
+
         # Store data for interactive table row
         table_row_data = {
             "player_name": player_name,
             "player_display_name": player_display_name,
             "player_identifier": player_identifier,
+            "stable_id": stable_unique_id,
             "team_pos": f"{team_abbrev} · {player_pos}",
             "proj": proj_display,
             "fd_line_val": fd_line_val,
@@ -1347,10 +1325,6 @@ No game is selected yet — choose one in the sidebar to start.
             "prior_logs": prior_logs,
         }
         table_rows.append(table_row_data)
-
-        # Generate a stable unique ID for this player/stat combination
-        # Store it in session state so it persists across renders (safely)
-        stable_unique_id = get_or_create_stable_id(player_identifier, stat_code)
 
         # prepare data for expander
         pdata = {
@@ -1377,118 +1351,126 @@ No game is selected yet — choose one in the sidebar to start.
         }
         player_payloads.append(pdata)
 
+        # re-render interactive table
+        table_placeholder.empty()
+        with table_placeholder.container():
+            st.markdown("""
+            <style>
+            .player-table-row {
+                padding: 8px;
+                border-bottom: 1px solid #e0e0e0;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
+            header_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
+            with header_cols[0]:
+                st.markdown("**Player**")
+            with header_cols[1]:
+                st.markdown("**Team/Pos**")
+            with header_cols[2]:
+                st.markdown("**Proj**")
+            with header_cols[3]:
+                st.markdown("**Line**")
+            with header_cols[4]:
+                st.markdown("**O/U**")
+            with header_cols[5]:
+                st.markdown("**Hit%**")
+            with header_cols[6]:
+                st.markdown("**Opp Def**")
+
+            st.markdown("---")
+
+            for row_data in table_rows:
+                row_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
+
+                with row_cols[0]:
+                    st.write(row_data["player_display_name"])
+
+                with row_cols[1]:
+                    st.write(row_data["team_pos"])
+
+                with row_cols[2]:
+                    st.write(row_data["proj"])
+
+                with row_cols[3]:
+                    if row_data["stat_code"] == "DD":
+                        st.write("—")
+                    else:
+                        player_identifier = row_data["player_identifier"]
+                        stable_id_row = row_data["stable_id"]
+                        current_line = row_data["current_line"]
+
+                        if current_line is not None:
+                            line_btn_cols = st.columns([1, 2, 1])
+                            with line_btn_cols[0]:
+                                table_namespace = f"table::{stable_id_row}::{row_data['stat_code']}::dec"
+                                dec_token = _get_widget_token(table_namespace)
+                                btn_key = f"table_{dec_token}"
+                                if st.button("➖", key=btn_key, 
+                                             help="Decrease by 0.5"):
+                                    set_adjusted_line_value(player_identifier, row_data['stat_code'], current_line - 0.5)
+                                    st.rerun()
+
+                            with line_btn_cols[1]:
+                                st.write(f"**{current_line:.1f}**")
+                                if current_line != row_data["fd_line_val"] and row_data["fd_line_val"] is not None:
+                                    st.caption(f"({row_data['fd_line_val']:.1f})")
+
+                            with line_btn_cols[2]:
+                                table_namespace_inc = f"table::{stable_id_row}::{row_data['stat_code']}::inc"
+                                inc_token = _get_widget_token(table_namespace_inc)
+                                btn_key_inc = f"table_{inc_token}"
+                                if st.button("➕", key=btn_key_inc, 
+                                             help="Increase by 0.5"):
+                                    set_adjusted_line_value(player_identifier, row_data['stat_code'], current_line + 0.5)
+                                    st.rerun()
+                        else:
+                            st.write("—")
+
+                with row_cols[4]:
+                    st.write(row_data["ou_short"])
+
+                with row_cols[5]:
+                    hit_rate = row_data["hit_rate"]
+                    if hit_rate is not None:
+                        hit_color = "🟢" if hit_rate >= 50 else "🔴" if hit_rate < 30 else "🟡"
+                        st.write(f"{hit_color} **{hit_rate:.0f}%**")
+                    else:
+                        st.write("—")
+
+                with row_cols[6]:
+                    st.write(row_data["opp_def"])
+
+        # re-render ALL expanders so far
+        rendered_combinations = set()
+        expanders_placeholder.empty()
+        with expanders_placeholder.container():
+            for idx, info in enumerate(player_payloads):
+                player_id_check = info.get("player_id", None)
+                stat_code_check = info.get("stat_code", "")
+
+                if player_id_check is None:
+                    continue
+
+                combo_key = (player_id_check, stat_code_check)
+                if combo_key in rendered_combinations:
+                    continue
+
+                rendered_combinations.add(combo_key)
+
+                roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
+                player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty else False
+
+                expander_title = f"{'⭐️ ' if player_is_starter else ''}{info['player_name']} ({info['team_abbrev']} · {info['player_pos']})"
+
+                with st.expander(expander_title, expanded=False):
+                    render_player_detail_body(info, cur_season, prev_season, render_index=idx)
+
         # status line
         status_placeholder.write(
             f"Loaded {len(table_rows)}/{total_players} players..."
         )
-
-    # Render table and expanders once after data has been gathered
-    with table_placeholder.container():
-        st.markdown("""
-        <style>
-        .player-table-row {
-            padding: 8px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-
-        header_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
-        with header_cols[0]:
-            st.markdown("**Player**")
-        with header_cols[1]:
-            st.markdown("**Team/Pos**")
-        with header_cols[2]:
-            st.markdown("**Proj**")
-        with header_cols[3]:
-            st.markdown("**Line**")
-        with header_cols[4]:
-            st.markdown("**O/U**")
-        with header_cols[5]:
-            st.markdown("**Hit%**")
-        with header_cols[6]:
-            st.markdown("**Opp Def**")
-
-        st.markdown("---")
-
-        for row_data in table_rows:
-            row_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
-
-            with row_cols[0]:
-                st.write(row_data["player_display_name"])
-
-            with row_cols[1]:
-                st.write(row_data["team_pos"])
-
-            with row_cols[2]:
-                st.write(row_data["proj"])
-
-            with row_cols[3]:
-                if row_data["stat_code"] == "DD":
-                    st.write("—")
-                else:
-                    player_identifier = row_data["player_identifier"]
-                    current_line = row_data["current_line"]
-
-                    if current_line is not None:
-                        line_btn_cols = st.columns([1, 2, 1])
-                        with line_btn_cols[0]:
-                            btn_key = f"table_dec_{player_identifier}_{row_data['stat_code']}"
-                            if st.button("➖", key=btn_key,
-                                         help="Decrease by 0.5"):
-                                set_adjusted_line_value(player_identifier, row_data['stat_code'], current_line - 0.5)
-                                st.rerun()
-
-                        with line_btn_cols[1]:
-                            st.write(f"**{current_line:.1f}**")
-                            if current_line != row_data["fd_line_val"] and row_data["fd_line_val"] is not None:
-                                st.caption(f"({row_data['fd_line_val']:.1f})")
-
-                        with line_btn_cols[2]:
-                            btn_key_inc = f"table_inc_{player_identifier}_{row_data['stat_code']}"
-                            if st.button("➕", key=btn_key_inc,
-                                         help="Increase by 0.5"):
-                                set_adjusted_line_value(player_identifier, row_data['stat_code'], current_line + 0.5)
-                                st.rerun()
-                    else:
-                        st.write("—")
-
-            with row_cols[4]:
-                st.write(row_data["ou_short"])
-
-            with row_cols[5]:
-                hit_rate = row_data["hit_rate"]
-                if hit_rate is not None:
-                    hit_color = "🟢" if hit_rate >= 50 else "🔴" if hit_rate < 30 else "🟡"
-                    st.write(f"{hit_color} **{hit_rate:.0f}%**")
-                else:
-                    st.write("—")
-
-            with row_cols[6]:
-                st.write(row_data["opp_def"])
-
-    rendered_combinations = set()
-    with expanders_placeholder.container():
-        for idx, info in enumerate(player_payloads):
-            player_id_check = info.get("player_id", None)
-            stat_code_check = info.get("stat_code", "")
-
-            if player_id_check is None:
-                continue
-
-            combo_key = (player_id_check, stat_code_check)
-            if combo_key in rendered_combinations:
-                continue
-
-            rendered_combinations.add(combo_key)
-
-            roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
-            player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty else False
-
-            expander_title = f"{'⭐️ ' if player_is_starter else ''}{info['player_name']} ({info['team_abbrev']} · {info['player_pos']})"
-
-            with st.expander(expander_title, expanded=False):
-                render_player_detail_body(info, cur_season, prev_season, render_index=idx)
 
     # final status
     status_placeholder.success("✅ Done.")
