@@ -10,9 +10,8 @@ from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import (
     playergamelog,
     leaguedashteamstats,
-    teamgamelog,
-    scoreboardv2,
     leaguegamefinder,
+    scoreboardv2,
 )
 from nba_api.live.nba.endpoints import scoreboard
 
@@ -104,14 +103,23 @@ def get_opponent_recent_games(opponent_abbrev, season="2024-25", last_n=10):
         team_id = team_info[0]["id"]
 
         rate_limit()
-        gamelog = teamgamelog.TeamGameLog(
-            team_id=team_id,
-            season=season,
-            season_type_all_star="Regular Season",
+        # Use leaguegamefinder to get recent games for the team
+        gamefinder = leaguegamefinder.LeagueGameFinder(
+            team_id_nullable=team_id,
+            season_nullable=season,
+            season_type_nullable='Regular Season',
+            timeout=10
         )
-        df = gamelog.get_data_frames()[0]
-
-        return df.head(last_n)
+        
+        # Get the games and sort by date (most recent first)
+        games = gamefinder.get_data_frames()[0]
+        if not games.empty:
+            # Convert GAME_DATE to datetime and sort
+            games['GAME_DATE'] = pd.to_datetime(games['GAME_DATE'])
+            games = games.sort_values('GAME_DATE', ascending=False)
+            return games.head(last_n)
+            
+        return pd.DataFrame()
     except Exception as e:
         print(f"Error fetching opponent recent games: {e}")
         return pd.DataFrame()
@@ -172,15 +180,15 @@ def fetch_fanduel_lines(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
             "oddsFormat": "american",
         }
 
-        print(f"🔍 Fetching player props for event {event_id}...")
+        print(f"[INFO] Fetching player props for event {event_id}...")
         response = requests.get(url, params=params, timeout=15)
 
         if response.status_code != 200:
-            print(f"❌ API Error {response.status_code}: {response.text}")
+            print(f"[ERROR] API Error {response.status_code}: {response.text}")
             return {}
 
         data = response.json()
-        print("✅ Got odds response")
+        print("[OK] Got odds response")
 
         player_props = {}
 
@@ -188,7 +196,7 @@ def fetch_fanduel_lines(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
             if bookmaker.get("key") != "fanduel":
                 continue
 
-            print("📊 Found FanDuel odds")
+            print("[INFO] Found FanDuel odds")
 
             for market in bookmaker.get("markets", []):
                 market_key = market.get("key")
@@ -232,11 +240,11 @@ def fetch_fanduel_lines(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
                         elif outcome_type == "Under":
                             player_props[player_name][stat_code]["under_price"] = price
 
-        print(f"✅ Parsed props for {len(player_props)} players")
+        print(f"[OK] Parsed props for {len(player_props)} players")
         return player_props
 
     except Exception as e:
-        print(f"❌ Error fetching FanDuel lines: {e}")
+        print(f"[ERROR] Error fetching FanDuel lines: {e}")
         import traceback
 
         traceback.print_exc()
@@ -254,11 +262,11 @@ def get_event_id_for_game(
         url = "https://api.the-odds-api.com/v4/sports/basketball_nba/events"
         params = {"apiKey": api_key}
 
-        print(f"🔍 Looking for event: {away_team} @ {home_team}")
+        print(f"[INFO] Looking for event: {away_team} @ {home_team}")
         response = requests.get(url, params=params, timeout=10)
 
         if response.status_code != 200:
-            print(f"❌ Events API error: {response.status_code}")
+            print(f"[ERROR] Events API error: {response.status_code}")
             return None
 
         events = response.json()
@@ -307,14 +315,14 @@ def get_event_id_for_game(
             # crude match
             if (home_full in event_home) and (away_full in event_away):
                 event_id = event.get("id")
-                print(f"✅ Found event ID: {event_id}")
+                print(f"[OK] Found event ID: {event_id}")
                 return event_id
 
-        print(f"⚠️ No event found for {away_team} @ {home_team}")
+        print(f"[WARN] No event found for {away_team} @ {home_team}")
         return None
 
     except Exception as e:
-        print(f"❌ Error getting event ID: {e}")
+        print(f"[ERROR] Error getting event ID: {e}")
         return None
 
 
@@ -532,7 +540,7 @@ def get_player_position(player_id, season="2024-25"):
             return None
 
         pos_string = str(pos_string).strip().upper()
-        print(f"🔍 Parsing position: '{pos_string}'")
+        print(f"[INFO] Parsing position: '{pos_string}'")
 
         # Handle multi-position like "F-C", "C-F", "G-F", etc.
         if "-" in pos_string:
@@ -563,7 +571,7 @@ def get_player_position(player_id, season="2024-25"):
             print(f"   → Forward: returning F")
             return "F"
 
-    print(f"\n🏀 Getting position for player_id: {player_id}, season: {season}")
+    print(f"\n[INFO] Getting position for player_id: {player_id}, season: {season}")
 
     # 1. FAST PATH: check sqlite metadata first
     try:
@@ -571,10 +579,10 @@ def get_player_position(player_id, season="2024-25"):
         if meta and meta.get("position"):
             cached_simplified = simplify_position(meta["position"])
             if cached_simplified:
-                print(f"   ✅ (DB cached) Position: {cached_simplified}\n")
+                print(f"   [OK] (DB cached) Position: {cached_simplified}\n")
                 return cached_simplified
     except Exception as e:
-        print(f"   ⚠️ DB metadata lookup failed: {e}")
+        print(f"   [WARN] DB metadata lookup failed: {e}")
 
     # If not cached, we'll determine it the slow way, then write it back.
     team_abbrev_for_db = None
@@ -622,7 +630,7 @@ def get_player_position(player_id, season="2024-25"):
                         row_match = roster_df[roster_df["PLAYER_ID"] == player_id]
                         if not row_match.empty:
                             raw_pos = row_match.iloc[0].get("POSITION", "")
-                            print(f"   📋 Roster says: '{raw_pos}'")
+                            print(f"   [INFO] Roster says: '{raw_pos}'")
 
                             final_position_letter = simplify_position(raw_pos)
 
@@ -632,7 +640,7 @@ def get_player_position(player_id, season="2024-25"):
                             )
 
         except Exception as e:
-            print(f"   ⚠️ Roster method failed: {e}")
+            print(f"   [WARN] Roster method failed: {e}")
 
         # METHOD 2: fallback to CommonPlayerInfo
         if not final_position_letter:
@@ -645,7 +653,7 @@ def get_player_position(player_id, season="2024-25"):
 
                 if not info_df.empty and "POSITION" in info_df.columns:
                     raw_pos = info_df.iloc[0]["POSITION"]
-                    print(f"   📊 API says: '{raw_pos}'")
+                    print(f"   [INFO] API says: '{raw_pos}'")
                     final_position_letter = simplify_position(raw_pos)
 
                 if (
@@ -656,7 +664,7 @@ def get_player_position(player_id, season="2024-25"):
                     player_name_for_db = info_df.iloc[0]["DISPLAY_FIRST_LAST"]
 
             except Exception as e:
-                print(f"   ⚠️ API method failed: {e}")
+                print(f"   [WARN] API method failed: {e}")
 
         # METHOD 3: final fallback - static info from nba_api.stats.static.players
         if not final_position_letter:
@@ -665,18 +673,18 @@ def get_player_position(player_id, season="2024-25"):
                 if pdata and "position" in pdata:
                     raw_pos = pdata.get("position", "")
                     if raw_pos:
-                        print(f"   📁 Static says: '{raw_pos}'")
+                        print(f"   [INFO] Static says: '{raw_pos}'")
                         final_position_letter = simplify_position(raw_pos)
 
                 if not player_name_for_db and pdata and "full_name" in pdata:
                     player_name_for_db = pdata["full_name"]
 
             except Exception as e:
-                print(f"   ⚠️ Static method failed: {e}")
+                print(f"   [WARN] Static method failed: {e}")
 
         # If STILL nothing, default to Forward
         if not final_position_letter:
-            print("   ⚠️ All methods failed - defaulting to F\n")
+            print("   [WARN] All methods failed - defaulting to F\n")
             final_position_letter = "F"
 
         # 2. persist to sqlite so future runs (even after restart) are instant
@@ -694,13 +702,13 @@ def get_player_position(player_id, season="2024-25"):
                 team=team_abbrev_for_db or "",
             )
         except Exception as e:
-            print(f"   ⚠️ could not save player_metadata: {e}")
+            print(f"   [WARN] could not save player_metadata: {e}")
 
-        print(f"   ✅ Position: {final_position_letter}\n")
+        print(f"   [OK] Position: {final_position_letter}\n")
         return final_position_letter
 
     except Exception as outer_e:
-        print(f"   ❌ ERROR determining position: {outer_e}")
+        print(f"   [ERROR] ERROR determining position: {outer_e}")
         # last-resort safety
         return "F"
 
@@ -861,12 +869,12 @@ def scrape_rotowire_starters():
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         
-        print("🔍 Scraping Rotowire for projected starters...")
+        print("[INFO] Scraping Rotowire for projected starters...")
         time.sleep(1.0)  # Be respectful with rate limiting
         response = requests.get(url, headers=headers, timeout=15)
         
         if response.status_code != 200:
-            print(f"❌ Failed to fetch Rotowire: HTTP {response.status_code}")
+            print(f"[ERROR] Failed to fetch Rotowire: HTTP {response.status_code}")
             return {}
         
         soup = BeautifulSoup(response.text, "html.parser")
@@ -925,11 +933,11 @@ def scrape_rotowire_starters():
                     # Default to starter if we can't determine (conservative approach)
                     starters_dict[name_normalized] = True
         
-        print(f"✅ Found {sum(1 for v in starters_dict.values() if v)} starters out of {len(starters_dict)} players")
+        print(f"[OK] Found {sum(1 for v in starters_dict.values() if v)} starters out of {len(starters_dict)} players")
         return starters_dict
-        
+
     except Exception as e:
-        print(f"❌ Error scraping Rotowire starters: {e}")
+        print(f"[ERROR] Error scraping Rotowire starters: {e}")
         import traceback
         traceback.print_exc()
         return {}

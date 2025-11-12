@@ -1,4 +1,4 @@
-# Mohib teri maa ko lund chutiya hai
+# bhosderchod streamlit 
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,6 +7,7 @@ import os
 import time
 import uuid
 import hashlib
+import random
 from datetime import datetime
 from copy import deepcopy
 
@@ -192,58 +193,83 @@ def calc_edge(prediction: float, line_value: float):
 # ─────────────────────────────
 def _get_session_state():
     """
-    Safely return the current Streamlit session_state object or None if
-    Streamlit has not finished initialising it yet.
+    Safely return the current Streamlit session_state object or a dummy object if
+    Streamlit has not finished initializing it yet.
     """
-    try:
-        return st.session_state  # type: ignore[attr-defined]
-    except Exception:
-        return None
+    if not hasattr(st, '_session_state'):
+        # Create a dummy session state if it doesn't exist yet
+        class DummySessionState:
+            def __init__(self):
+                self._state = {}
+            def __getattr__(self, name):
+                if name not in self._state:
+                    self._state[name] = {}
+                return self._state[name]
+            def __setattr__(self, name, value):
+                if name == '_state':
+                    return super().__setattr__(name, value)
+                if name not in self._state:
+                    self._state[name] = {}
+                self._state[name] = value
+            def get(self, key, default=None):
+                return self._state.get(key, default)
+            
+        st._session_state = DummySessionState()
+    
+    return st._session_state
 
 
 def safe_session_state_get(key, default_value=None):
     """
     Safely get a value from session state, handling initialization errors.
     """
-    session_state = _get_session_state()
-    if session_state is None:
-        return deepcopy(default_value)
-
     try:
-        return session_state.get(key, deepcopy(default_value))
-    except Exception:
-        return deepcopy(default_value)
+        session_state = _get_session_state()
+        if hasattr(session_state, 'get'):
+            return session_state.get(key, default_value)
+        return getattr(session_state, key, default_value)
+    except Exception as e:
+        print(f"Error accessing session state: {e}")
+        return default_value
 
 
 def safe_session_state_set(key, value):
     """
     Safely set a value in session state, handling initialization errors.
     """
-    session_state = _get_session_state()
-    if session_state is None:
-        return
-
     try:
-        session_state[key] = value
-    except Exception:
-        # Session state not ready, skip silently
-        pass
-
+        session_state = _get_session_state()
+        if hasattr(session_state, '__setitem__'):
+            session_state[key] = value
+        else:
+            setattr(session_state, key, value)
+    except Exception as e:
+        print(f"Error setting session state: {e}")
 
 def safe_session_state_init(key, default_value):
     """
-    Initialise a session state key with a default value if it does not
+    Initialize a session state key with a default value if it does not
     already exist, returning the stored value (or a deepcopy of the
     default when session state is unavailable).
     """
-    session_state = _get_session_state()
-    if session_state is None:
+    try:
+        session_state = _get_session_state()
+        
+        # Check if key exists using getattr for attribute-style access
+        if hasattr(session_state, key):
+            return getattr(session_state, key)
+            
+        # If not found, set the default value
+        default_copy = deepcopy(default_value)
+        if hasattr(session_state, '__setitem__'):
+            session_state[key] = default_copy
+        else:
+            setattr(session_state, key, default_copy)
+            
+        return default_copy
+    except Exception as e:
+        print(f"Error initializing session state: {e}")
         return deepcopy(default_value)
-
-    if key not in session_state:
-        session_state[key] = deepcopy(default_value)
-
-    return session_state[key]
 
 
 SESSION_DEFAULTS = {
@@ -268,6 +294,7 @@ def make_player_stat_key(player_identifier, stat_code):
 
 
 def get_adjusted_line_value(player_identifier, stat_code, default_value=None):
+    """Get the adjusted line value from session state with fallback to default."""
     adjusted_lines = safe_session_state_init("adjusted_lines", {})
     key = make_player_stat_key(player_identifier, stat_code)
     if default_value is not None and key not in adjusted_lines:
@@ -276,19 +303,25 @@ def get_adjusted_line_value(player_identifier, stat_code, default_value=None):
 
 
 def set_adjusted_line_value(player_identifier, stat_code, value):
+    """Set the adjusted line value in session state and trigger a re-render."""
     adjusted_lines = safe_session_state_init("adjusted_lines", {})
     key = make_player_stat_key(player_identifier, stat_code)
     adjusted_lines[key] = value
+    # Store the last update time for animation
+    st.session_state[f"{key}_last_updated"] = time.time()
 
 
-def reset_adjusted_line_value(player_identifier, stat_code):
+def reset_adjusted_line_value(player_identifier, stat_code, default_value=0.0):
+    """Reset the adjusted line to its default value."""
     adjusted_lines = safe_session_state_init("adjusted_lines", {})
     key = make_player_stat_key(player_identifier, stat_code)
     if key in adjusted_lines:
         del adjusted_lines[key]
+    return default_value
 
 
 def get_manual_line_value(player_identifier, stat_code, default_value=0.0):
+    """Get the manually set line value from session state."""
     manual_lines = safe_session_state_init("manual_lines", {})
     key = make_player_stat_key(player_identifier, stat_code)
     if key not in manual_lines:
@@ -297,9 +330,173 @@ def get_manual_line_value(player_identifier, stat_code, default_value=0.0):
 
 
 def set_manual_line_value(player_identifier, stat_code, value):
+    """Set the manual line value in session state."""
     manual_lines = safe_session_state_init("manual_lines", {})
     key = make_player_stat_key(player_identifier, stat_code)
     manual_lines[key] = value
+    st.session_state[f"{key}_last_updated"] = time.time()
+
+
+def get_line_step_size():
+    """Get the current step size for line adjustments."""
+    return safe_session_state_init("line_step_size", 0.5)
+
+
+def set_line_step_size(step_size):
+    """Set the step size for line adjustments."""
+    st.session_state["line_step_size"] = step_size
+
+
+def add_custom_css():
+    """Add custom CSS for animations and styling."""
+    st.markdown("""
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes flashGreen {
+            0% { background-color: rgba(16, 185, 129, 0.1); }
+            50% { background-color: rgba(16, 185, 129, 0.3); }
+            100% { background-color: transparent; }
+        }
+        @keyframes flashRed {
+            0% { background-color: rgba(239, 68, 68, 0.1); }
+            50% { background-color: rgba(239, 68, 68, 0.3); }
+            100% { background-color: transparent; }
+        }
+        @keyframes slideInRight {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        @keyframes slideInUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+        .hit-rate-updated {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        .hit-rate-increased {
+            animation: flashGreen 1s ease-in-out;
+        }
+        .hit-rate-decreased {
+            animation: flashRed 1s ease-in-out;
+        }
+        .line-adjust-btn {
+            width: 100%;
+            height: 100%;
+            min-height: 38px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        .bet-sheet-sidebar {
+            position: fixed;
+            right: 0;
+            top: 0;
+            width: 380px;
+            height: 100vh;
+            background: white;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+            z-index: 999;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+        .bet-sheet-item {
+            padding: 12px;
+            margin: 8px 0;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background: #f9fafb;
+        }
+        .bet-sheet-item:hover {
+            background: #f3f4f6;
+        }
+        .bet-sheet-floating-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 998;
+            background: #1f77b4;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            padding: 12px 24px;
+            font-weight: bold;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            cursor: pointer;
+        }
+        .bet-sheet-floating-btn:hover {
+            background: #1565a0;
+        }
+        .toast-notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        .toast-success {
+            background: #10b981;
+            color: white;
+        }
+        .toast-info {
+            background: #3b82f6;
+            color: white;
+        }
+        .toast-error {
+            background: #ef4444;
+            color: white;
+        }
+        @media (max-width: 768px) {
+            .bet-sheet-sidebar {
+                width: 100%;
+                height: 60vh;
+                bottom: 0;
+                top: auto;
+                border-radius: 20px 20px 0 0;
+                animation: slideInUp 0.3s ease-in-out;
+            }
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+def get_hit_rate_style(hit_rate, previous_hit_rate=None):
+    """Get CSS style for hit rate based on its value and change from previous."""
+    if hit_rate is None:
+        return ""
+    
+    base_style = ""
+    
+    # Animation for recent update
+    key = f"hit_rate_{id(hit_rate)}"
+    if key in st.session_state and time.time() - st.session_state[key] < 1.5:
+        base_style += "animation: fadeIn 0.5s ease-in-out;"
+    
+    # Color based on hit rate value
+    if hit_rate >= 60:
+        base_style += "color: #10B981;"  # Green for high hit rate
+    elif hit_rate <= 40:
+        base_style += "color: #EF4444;"  # Red for low hit rate
+    
+    # Highlight significant changes
+    if previous_hit_rate is not None:
+        change = hit_rate - previous_hit_rate
+        if abs(change) >= 5:  # Slightly more sensitive to changes
+            if change > 0:
+                base_style += "font-weight: bold; color: #10B981;"
+                st.session_state[f"{key}_increased"] = True
+            else:
+                base_style += "font-weight: bold; color: #EF4444;"
+                st.session_state[f"{key}_decreased"] = True
+    
+    return base_style
 
 
 def get_or_create_stable_id(player_identifier, stat_code):
@@ -329,7 +526,289 @@ def _get_widget_token(namespace: str) -> str:
 
 
 
+# ─────────────────────────────
+# Bet Sheet Functions
+# ─────────────────────────────
+def initialize_bet_sheet():
+    """Initialize bet sheet in session state if it doesn't exist."""
+    if 'bet_sheet' not in st.session_state:
+        st.session_state.bet_sheet = []
+    if 'bet_sheet_settings' not in st.session_state:
+        st.session_state.bet_sheet_settings = {
+            'allow_duplicates': False,
+            'line_step_size': 0.5,
+            'default_hit_rate_window': 'L10'
+        }
+    if 'bet_sheet_toast' not in st.session_state:
+        st.session_state.bet_sheet_toast = None
+
+
+def get_bet_sheet_item_id(player_id, stat_code, line):
+    """Generate a unique ID for a bet item based on player, stat, and line."""
+    if line is None:
+        # Use timestamp for unique ID when line is None
+        return f"{player_id}_{stat_code}_{int(time.time() * 1000)}"
+    return f"{player_id}_{stat_code}_{line:.1f}"
+
+
+def add_to_bet_sheet(player_data, stat_display, projection, line, edge, 
+                     line_source='scraped', hit_rates=None, allow_duplicate=False):
+    """
+    Add a player and their stat to the bet sheet.
+    
+    Args:
+        player_data: Dict with player_id, player_name, team_abbrev, stat_code
+        stat_display: Display name for the stat
+        projection: Model projection value
+        line: Line value (may be None)
+        edge: Edge string
+        line_source: 'scraped', 'manual', or 'adjusted'
+        hit_rates: Dict with L5, L10, Season hit rates
+        allow_duplicate: Whether to allow duplicate entries
+    """
+    initialize_bet_sheet()
+    
+    # Create bet item (line can be None)
+    bet_id = get_bet_sheet_item_id(player_data['player_id'], player_data['stat_code'], line)
+    
+    # Check for duplicates (check by player+stat+line combination)
+    # For None lines, we allow duplicates since user will set line later
+    if not allow_duplicate and line is not None:
+        existing = next((i for i, bet in enumerate(st.session_state.bet_sheet) 
+                        if (bet.get('player_id') == player_data['player_id'] and 
+                            bet.get('stat_code') == player_data['stat_code'] and
+                            bet.get('line') is not None and
+                            abs(bet.get('line', 0) - line) < 0.01)), None)
+        if existing is not None:
+            line_display = f"{line:.1f}" if line else "N/A"
+            st.session_state.bet_sheet_toast = {
+                'type': 'info',
+                'message': f"Already in bet sheet: {player_data['player_name']} ({stat_display} {line_display})"
+            }
+            st.rerun()
+            return
+    
+    bet_data = {
+        'id': bet_id,
+        'player_name': player_data['player_name'],
+        'player_id': player_data['player_id'],
+        'team_abbrev': player_data.get('team_abbrev', ''),
+        'stat_code': player_data['stat_code'],
+        'stat_display': stat_display,
+        'projection': projection,
+        'line': line,
+        'line_source': line_source,
+        'edge': edge,
+        'stake': None,  # Optional stake input
+        'hit_rates': hit_rates or {'L5': None, 'L10': None, 'Season': None},
+        'hit_rate_window': st.session_state.bet_sheet_settings.get('default_hit_rate_window', 'L10'),
+        'timestamp': pd.Timestamp.now().isoformat()
+    }
+    
+    st.session_state.bet_sheet.append(bet_data)
+    
+    # Toast message
+    if line is not None:
+        toast_msg = f"Added {player_data['player_name']} ({stat_display} {line:+.1f}) to Bet Sheet"
+    else:
+        toast_msg = f"Added {player_data['player_name']} ({stat_display}) to Bet Sheet - Enter line below"
+    
+    st.session_state.bet_sheet_toast = {
+        'type': 'success',
+        'message': toast_msg
+    }
+    st.rerun()
+
+
+def remove_from_bet_sheet(bet_id):
+    """Remove a bet item from the sheet by ID."""
+    initialize_bet_sheet()
+    st.session_state.bet_sheet = [
+        bet for bet in st.session_state.bet_sheet if bet.get('id') != bet_id
+    ]
+    st.rerun()
+
+
+def recalculate_hit_rates_for_bet(bet, cur_season, prev_season):
+    """Recalculate hit rates for a bet item based on current line and game logs."""
+    player_id = bet.get('player_id')
+    player_name = bet.get('player_name')
+    stat_code = bet.get('stat_code')
+    line = bet.get('line')
+    
+    if line is None or stat_code == "DD":
+        return bet.get('hit_rates', {})
+    
+    # Get game logs
+    current_logs = get_player_game_logs_cached_db(player_id, player_name, cur_season) if player_name else pd.DataFrame()
+    if current_logs is None or current_logs.empty:
+        prior_logs = get_player_game_logs_cached_db(player_id, player_name, prev_season) if player_name else pd.DataFrame()
+        combined_logs = prior_logs if not prior_logs.empty else pd.DataFrame()
+    else:
+        combined_logs = current_logs
+    
+    if combined_logs.empty:
+        return bet.get('hit_rates', {})
+    
+    # Calculate hit rates for all windows
+    hit_rates = {}
+    hit_rates['L5'] = calc_hit_rate(combined_logs, stat_code, line, window=5)
+    hit_rates['L10'] = calc_hit_rate(combined_logs, stat_code, line, window=10)
+    
+    # Season hit rate
+    if stat_code == "PRA":
+        if {"PTS", "REB", "AST"}.issubset(combined_logs.columns):
+            season_vals = combined_logs["PTS"] + combined_logs["REB"] + combined_logs["AST"]
+            hits = (season_vals >= line).sum()
+            hit_rates['Season'] = (hits / len(season_vals) * 100) if len(season_vals) > 0 else None
+    else:
+        if stat_code in combined_logs.columns:
+            hits = (combined_logs[stat_code] >= line).sum()
+            hit_rates['Season'] = (hits / len(combined_logs) * 100) if len(combined_logs) > 0 else None
+    
+    return hit_rates
+
+
+def update_bet_sheet_item(bet_id, updates, cur_season=None, prev_season=None):
+    """Update a bet item with new values and recalculate hit rates if line changed."""
+    initialize_bet_sheet()
+    for i, bet in enumerate(st.session_state.bet_sheet):
+        if bet.get('id') == bet_id:
+            # If line is being updated, recalculate hit rates
+            if 'line' in updates and cur_season and prev_season:
+                new_line = updates['line']
+                bet_copy = bet.copy()
+                bet_copy['line'] = new_line
+                new_hit_rates = recalculate_hit_rates_for_bet(bet_copy, cur_season, prev_season)
+                updates['hit_rates'] = new_hit_rates
+                # Also update edge if we have projection
+                if 'projection' in bet and new_line:
+                    proj = bet.get('projection', 0)
+                    edge_str, _, _ = calc_edge(proj, new_line)
+                    updates['edge'] = edge_str
+            
+            st.session_state.bet_sheet[i].update(updates)
+            break
+    st.rerun()
+
+
+def clear_bet_sheet():
+    """Clear all items from the bet sheet."""
+    initialize_bet_sheet()
+    st.session_state.bet_sheet = []
+    st.session_state.bet_sheet_toast = {
+        'type': 'success',
+        'message': 'Bet sheet cleared'
+    }
+    st.rerun()
+
+
+def export_bet_sheet_csv():
+    """Export bet sheet to CSV format."""
+    initialize_bet_sheet()
+    if not st.session_state.bet_sheet:
+        return None
+    
+    rows = []
+    for bet in st.session_state.bet_sheet:
+        hit_rate = bet.get('hit_rates', {}).get(bet.get('hit_rate_window', 'L10'), None)
+        rows.append({
+            'Player': bet['player_name'],
+            'Team': bet['team_abbrev'],
+            'Stat': bet['stat_display'],
+            'Line': bet['line'],
+            'Projection': bet['projection'],
+            'Edge': bet['edge'],
+            'Hit Rate (%)': hit_rate if hit_rate is not None else '',
+            'Stake': bet.get('stake', ''),
+            'Line Source': bet.get('line_source', 'scraped'),
+            'Added': bet.get('timestamp', '')
+        })
+    
+    df = pd.DataFrame(rows)
+    return df.to_csv(index=False)
+
+
 def render_player_detail_body(pdata, cur_season, prev_season, render_index=None):
+    # Add custom CSS for animations
+    add_custom_css()
+    
+    # Get or create a stable identifier for this player/stat combo
+    player_id = pdata.get("player_id")
+    player_name = pdata.get("player_name")
+    if not player_id:
+        player_id = f"{player_name}_{pdata['team_abbrev']}"
+    
+    stat_code = pdata["stat_code"]
+    stat_display = pdata.get("stat_display", stat_code)
+    
+    # Get the current line value (default to FanDuel line if available)
+    fd_line_val = pdata.get("fd_line_val")
+    current_line = get_adjusted_line_value(player_id, stat_code, fd_line_val or 0.0)
+    
+    # Get the projection and edge
+    projection = pdata.get("prediction", 0)
+    edge = pdata.get("edge_str", "—")
+    
+    # Add to Bet Sheet button with unique timestamp-based key
+    button_key = f"add_to_betsheet_{player_id}_{stat_code}_{int(time.time() * 1000)}"
+    if st.button("📝 Add to Bet Sheet", 
+                key=button_key,
+                help=f"Add {player_name}'s {stat_display} to your bet sheet"):
+        add_to_bet_sheet(
+            player_data={
+                'player_id': player_id,
+                'player_name': player_name,
+                'team_abbrev': pdata.get('team_abbrev', ''),
+                'stat_code': stat_code
+            },
+            stat_display=stat_display,
+            projection=projection,
+            line=current_line if current_line is not None else fd_line_val,
+            edge=edge
+        )
+    
+    # Get the step size for adjustments
+    step_size = get_line_step_size()
+    
+    # Get game logs for hit rate calculation
+    game_logs = get_player_game_logs_cached_db(player_id, player_name, cur_season) if player_name else pd.DataFrame()
+    if game_logs is None:
+        game_logs = pd.DataFrame()
+    
+    # Calculate hit rates for different time windows
+    def calculate_hit_rates(logs, line, stat=stat_code):
+        if logs.empty or line is None:
+            return {"L5": 0, "L10": 0, "Season": 0, "H2H": 0}
+            
+        # Filter logs to relevant stat
+        stat_col = stat.upper() if stat.upper() in logs.columns else None
+        if stat_col is None:
+            return {"L5": 0, "L10": 0, "Season": 0, "H2H": 0}
+            
+        # Calculate hits (1 if actual >= line, else 0)
+        logs = logs.copy()
+        logs['hit'] = (logs[stat_col] >= line).astype(int)
+        
+        # Calculate hit rates for different windows
+        l5 = logs.head(5)['hit'].mean() * 100 if len(logs) >= 5 else 0
+        l10 = logs.head(10)['hit'].mean() * 100 if len(logs) >= 10 else 0
+        season = logs['hit'].mean() * 100
+        
+        # Calculate H2H hit rate if available
+        h2h_hit_rate = 0
+        if 'h2h_history' in pdata and pdata['h2h_history'] is not None and not pdata['h2h_history'].empty:
+            h2h_logs = pdata['h2h_history'].copy()
+            if stat_col in h2h_logs.columns:
+                h2h_logs['hit'] = (h2h_logs[stat_col] >= line).astype(int)
+                h2h_hit_rate = h2h_logs['hit'].mean() * 100
+        
+        return {
+            "L5": round(l5, 1) if l5 > 0 else 0,
+            "L10": round(l10, 1) if l10 > 0 else 0,
+            "Season": round(season, 1) if season > 0 else 0,
+            "H2H": round(h2h_hit_rate, 1) if h2h_hit_rate > 0 else 0
+        }
     """
     The deep dive panel for a single player.
     Called inside each expander, after we build pdata in the loop.
@@ -829,154 +1308,269 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
         st.write(f"**Back-to-Back:** {'Yes' if is_b2b else 'No'}")
         st.write(f"**Opponent:** {opponent_abbrev}")
 
-    # ---- Sportsbook Line / Hit Rate section
+    # ---- Book Line Adjustment section
     st.markdown("---")
-    st.subheader("📊 Sportsbook Line & Hit Rate")
+    st.subheader("📊 Book Line & Hit Rate")
+    
+    # Add custom CSS for animations and styling
+    add_custom_css()
 
-    # Get player_id from pdata (required for unique keys)
+    # Get player identifier
     player_id = pdata.get("player_id", None)
     if player_id is None or pd.isna(player_id):
-        # Fallback: use a hash of player_name + team as player_id
         fallback_id = hashlib.md5(f"{player_name}_{team_abbrev}".encode()).hexdigest()[:8]
         player_id = f"fallback_{fallback_id}"
-
+    
     player_identifier = str(player_id)
     stable_id = get_or_create_stable_id(player_identifier, stat_code)
-
-    # Generate globally unique widget keys using stable tokens
-    # Generate stable keys for buttons and manual input
+    
+    # Generate unique keys for this player/stat combo
     base_key = f"{stable_id}_{stat_code}_{render_index or 0}"
     unique_suffix = uuid.uuid4().hex
-
-    decrease_key = f"detail_dec_{player_identifier}_{stat_code}_{render_index or 0}_{unique_suffix}"
-    increase_key = f"detail_inc_{player_identifier}_{stat_code}_{render_index or 0}_{uuid.uuid4().hex}"
-    reset_key    = f"detail_reset_{player_identifier}_{stat_code}_{render_index or 0}_{uuid.uuid4().hex}"
-    manual_key   = f"detail_manual_{player_identifier}_{stat_code}_{render_index or 0}_{uuid.uuid4().hex}"
+    
+    # Keys for buttons and inputs
+    decrease_key = f"detail_dec_{base_key}_{unique_suffix}"
+    increase_key = f"detail_inc_{base_key}_{unique_suffix}"
+    reset_key = f"detail_reset_{base_key}_{unique_suffix}"
+    manual_key = f"detail_manual_{base_key}_{unique_suffix}"
+    step_key = f"step_size_{base_key}_{unique_suffix}"
 
     
     # Initialize or get adjusted line from session state (safely)
-    current_line = st.session_state.get(f"line_{player_identifier}_{stat_code}", fd_line_val or 0.0)
-
-
-    # Handle button clicks
-    button_col1, button_col2, button_col3 = st.columns([1, 2, 1])
-
-    with button_col1:
-        if st.button("➖", key=decrease_key, help="Decrease line by 0.5", use_container_width=True):
-            if current_line is not None:
-                new_value = current_line - 0.5
-                st.session_state[f"line_{player_identifier}_{stat_code}"] = new_value
-
-
-    with button_col2:
-        if stat_code == "DD":
-            st.markdown("**Line:** N/A (DD market)")
-        else:
-            if current_line is None:
-                st.markdown("**Line:** —")
-                st.caption("No line available. Enter manually below.")
+    current_line = get_adjusted_line_value(player_identifier, stat_code, fd_line_val or 0.0)
+    
+    # Get current step size
+    step_size = get_line_step_size()
+    
+    # Create a form for line adjustment with unique key
+    form_key = f"line_form_{base_key}_{unique_suffix}"
+    with st.form(key=form_key):
+        # Step size selector and reset button in the same row
+        col_step, col_reset = st.columns([2, 3])
+        
+        with col_step:
+            step_options = [0.5, 1.0, 2.0, 5.0]
+            try:
+                step_index = step_options.index(step_size)
+            except ValueError:
+                step_index = 0  # Default to 0.5 if step_size is not in options
+                step_size = 0.5
+                set_line_step_size(step_size)
+                
+            step_size = st.selectbox(
+                "Step Size",
+                step_options,
+                index=step_index,
+                key=f"step_select_{base_key}_{unique_suffix}",
+                help="Adjust the increment/decrement step size"
+            )
+            set_line_step_size(step_size)
+        
+        with col_reset:
+            if st.form_submit_button("🔄 Reset to Default", 
+                                  key=f"reset_btn_{base_key}_{unique_suffix}",
+                                  use_container_width=True):
+                reset_adjusted_line_value(player_identifier, stat_code, fd_line_val)
+                st.rerun()
+        
+        # Line adjustment controls
+        col1, col2, col3 = st.columns([1, 2, 1])
+        
+        with col1:
+            if st.form_submit_button("➖", 
+                                  key=f"decrease_btn_{base_key}_{unique_suffix}", 
+                                  help=f"Decrease line by {step_size}", 
+                                  use_container_width=True):
+                if current_line is not None:
+                    new_value = round(current_line - step_size, 1)
+                    set_adjusted_line_value(player_identifier, stat_code, new_value)
+                    st.rerun()
+        
+        with col2:
+            if stat_code == "DD":
+                st.markdown("**Line:** N/A (DD market)")
             else:
-                st.markdown(f"**Current Line:** **{current_line:.1f}**")
-                if current_line != fd_line_val:
-                    if st.button("🔄 Reset", key=reset_key, use_container_width=True):
-                        st.session_state[f"line_{player_identifier}_{stat_code}"] = fd_line_val or 0.0
-
-
-    with button_col3:
-        if st.button("➕", key=increase_key, help="Increase line by 0.5", use_container_width=True):
-            if current_line is not None:
-                new_value = current_line + 0.5
-                st.session_state[f"line_{player_identifier}_{stat_code}"] = new_value
+                if current_line is None:
+                    st.markdown("**Line:** —")
+                    st.caption("No line available. Enter manually below.")
+                else:
+                    # Use number input for direct editing
+                    new_line = st.number_input(
+                        "Current Line",
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=step_size,
+                        value=float(current_line) if current_line is not None else 0.0,
+                        format="%.1f",
+                        key=f"line_input_{base_key}_{unique_suffix}",
+                        label_visibility="collapsed"
+                    )
+                    
+                    # Update if changed
+                    if new_line != current_line and current_line is not None:
+                        set_adjusted_line_value(player_identifier, stat_code, new_line)
+                        st.rerun()
+        
+        with col3:
+            if st.form_submit_button("➕", key=increase_key, help=f"Increase line by {step_size}", use_container_width=True):
+                if current_line is not None:
+                    new_value = round(current_line + step_size, 1)
+                    set_adjusted_line_value(player_identifier, stat_code, new_value)
+                    st.rerun()
 
 
     # Manual line input option (if no line available)
     if current_line is None and stat_code != "DD":
         manual_default = get_manual_line_value(player_identifier, stat_code, 0.0)
-        manual_line = st.number_input(
-            "Enter line manually",
-            min_value=0.0,
-            value=manual_default,
-            step=0.5,
-            key=manual_key,
-            help="Enter a custom line to calculate hit rate",
-        )
-        set_manual_line_value(player_identifier, stat_code, manual_line)
-        if manual_line > 0 and manual_line != current_line:
-            set_adjusted_line_value(player_identifier, stat_code, manual_line)
-            st.rerun()
-        current_line = get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
+        with st.form(key=f"manual_form_{base_key}"):
+            manual_line = st.number_input(
+                "Enter line manually",
+                min_value=0.0,
+                value=manual_default,
+                step=step_size,
+                key=manual_key,
+                help="Enter a custom line to calculate hit rate",
+            )
+            
+            if st.form_submit_button("Apply Manual Line"):
+                if manual_line > 0:
+                    set_manual_line_value(player_identifier, stat_code, manual_line)
+                    set_adjusted_line_value(player_identifier, stat_code, manual_line)
+                    st.rerun()
     
     # Recalculate hit rate and edge based on current (adjusted) line
     if current_line is not None and stat_code != "DD":
         # Use combined logs for hit rate calculation
         combined_logs_for_hit = current_logs if not current_logs.empty else prior_logs
-        adjusted_hit_rate = calc_hit_rate(combined_logs_for_hit, stat_code, current_line, window=10)
-        adjusted_edge_str, adjusted_rec_text, adjusted_ou_short = calc_edge(prediction, current_line)
+        
+        # Calculate hit rates for different time windows
+        def calculate_hit_ates(logs, line, stat=stat_code):
+            if logs is None or logs.empty or line is None:
+                return {"L5": 0, "L10": 0, "Season": 0, "H2H": 0}
+                
+            stat_col = stat.upper() if stat.upper() in logs.columns else None
+            if stat_col is None:
+                return {"L5": 0, "L10": 0, "Season": 0, "H2H": 0}
+                
+            logs = logs.copy()
+            logs['hit'] = (logs[stat_col] >= line).astype(int)
+            
+            l5 = logs.head(5)['hit'].mean() * 100 if len(logs) >= 5 else 0
+            l10 = logs.head(10)['hit'].mean() * 100 if len(logs) >= 10 else 0
+            season = logs['hit'].mean() * 100 if not logs.empty else 0
+            
+            h2h_hit_rate = 0
+            if 'h2h_history' in pdata and pdata['h2h_history'] is not None and not pdata['h2h_history'].empty:
+                h2h_logs = pdata['h2h_history'].copy()
+                if stat_col in h2h_logs.columns:
+                    h2h_logs['hit'] = (h2h_logs[stat_col] >= line).astype(int)
+                    h2h_hit_rate = h2h_logs['hit'].mean() * 100
+            
+            return {
+                "L5": round(l5, 1) if l5 > 0 else 0,
+                "L10": round(l10, 1) if l10 > 0 else 0,
+                "Season": round(season, 1) if season > 0 else 0,
+                "H2H": round(h2h_hit_rate, 1) if h2h_hit_rate > 0 else 0
+            }
+        
+        # Calculate hit rates for different time windows
+        hit_rates = calculate_hit_rates(combined_logs_for_hit, current_line)
         
         # Store in session state (safely)
-        cache_hit_rate(player_identifier, stat_code, adjusted_hit_rate)
+        cache_hit_rate(player_identifier, stat_code, hit_rates["L10"])
+        
+        # Calculate edge information
+        adjusted_edge_str, adjusted_rec_text, adjusted_ou_short = calc_edge(prediction, current_line)
     else:
-        adjusted_hit_rate = hit_pct_val
+        hit_rates = {"L5": 0, "L10": 0, "Season": 0, "H2H": 0}
+        adjusted_hit_rate = hit_pct_val or 0
         adjusted_edge_str = edge_str
         adjusted_rec_text = rec_text
         adjusted_ou_short = "—"
 
-    colL, colH = st.columns(2)
-
-    with colL:
-        st.markdown("**Line / Edge**")
-        if stat_code == "DD":
-            st.write("Most books don't post DD props here, so no line.")
-        else:
-            if current_line is None:
-                st.write("Line: —")
-                st.write("Edge vs Line: —")
-                st.caption("No line available for this player/stat.")
-            else:
-                # Show original line if adjusted
-                if current_line != fd_line_val and fd_line_val is not None:
-                    st.caption(f"Original line: {fd_line_val:.1f}")
+    # Display line and hit rate information
+    st.markdown("### 📊 Performance Metrics")
+    
+    if stat_code == "DD":
+        st.info("Double-double markets don't support line adjustments in this view.")
+    elif current_line is None:
+        st.warning("No line available for this player/stat.")
+    else:
+        # Display in two columns: Line/Edge and Hit Rates
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Line and Edge information
+            st.markdown("#### 📏 Line & Edge")
+            
+            # Show current line in a nice card
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        padding: 15px; border-radius: 8px; color: white; text-align: center; margin: 10px 0;">
+                <div style="font-size: 14px; opacity: 0.9;">CURRENT LINE</div>
+                <div style="font-size: 28px; font-weight: bold;">{current_line:.1f}</div>
+                {f'<div style="font-size: 12px; opacity: 0.8;">(Original: {fd_line_val:.1f})</div>' 
+                  if current_line != fd_line_val and fd_line_val is not None else ''}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Show edge information
+            st.markdown(f"**Edge vs Line:** {adjusted_edge_str}")
+            st.caption(adjusted_rec_text)
+            
+            # Show model projection vs line
+            if 'prediction' in pdata and pdata['prediction'] is not None:
+                proj = pdata['prediction']
+                diff = proj - current_line
+                diff_pct = (diff / current_line * 100) if current_line > 0 else 0
                 
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                            padding: 15px; border-radius: 8px; color: white; text-align: center; margin: 10px 0;">
-                    <div style="font-size: 14px; opacity: 0.9;">CURRENT LINE</div>
-                    <div style="font-size: 28px; font-weight: bold;">{current_line:.1f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown(f"**Edge vs Line:** {adjusted_edge_str}")
-                st.caption(adjusted_rec_text)
-
-    with colH:
-        st.markdown("**Hit Rate (Last 10 Games)**")
-        if stat_code == "DD":
-            st.write("Hit%: —")
-            st.caption("N/A for DD market here.")
-        else:
-            if adjusted_hit_rate is None:
-                st.write("Hit%: —")
-                st.caption("We only compute this if we have a line.")
-            else:
-                # Color code hit rate
-                hit_color = "#28a745" if adjusted_hit_rate >= 50 else "#dc3545" if adjusted_hit_rate < 30 else "#ffc107"
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, {hit_color} 0%, {hit_color}dd 100%); 
-                            padding: 15px; border-radius: 8px; color: white; text-align: center; margin: 10px 0;">
-                    <div style="font-size: 14px; opacity: 0.9;">HIT RATE</div>
-                    <div style="font-size: 28px; font-weight: bold;">{adjusted_hit_rate:.0f}%</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.caption(
-                    f"Hit% = % of last 10 games over line of {current_line:.1f}. "
-                    "Historical only."
+                st.markdown("#### 📈 Projection vs Line")
+                st.metric(
+                    "Model Projection",
+                    f"{proj:.1f}",
+                    delta=f"{diff:+.1f} ({diff_pct:+.1f}%)",
+                    delta_color=("normal" if diff > 0.5 else "inverse" if diff < -0.5 else "off")
                 )
-                
-                # Show comparison if line was adjusted
-                if current_line != fd_line_val and fd_line_val is not None and hit_pct_val is not None:
-                    hit_diff = adjusted_hit_rate - hit_pct_val
-                    st.caption(f"vs Original: {hit_diff:+.0f}% ({hit_pct_val:.0f}% @ {fd_line_val:.1f})")
+        
+        with col2:
+            # Hit rate information
+            st.markdown("#### 🎯 Hit Rate Analysis")
+            
+            # Main hit rate display
+            hit_rate = hit_rates.get("L10", 0)
+            hit_color = "#28a745" if hit_rate >= 50 else "#dc3545" if hit_rate < 30 else "#ffc107"
+            
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, {hit_color} 0%, {hit_color}dd 100%); 
+                        padding: 15px; border-radius: 8px; color: white; text-align: center; margin: 10px 0;">
+                <div style="font-size: 14px; opacity: 0.9;">LAST 10 GAMES</div>
+                <div style="font-size: 28px; font-weight: bold;">{hit_rate:.0f}%</div>
+                <div style="font-size: 12px; opacity: 0.8;">over {current_line:.1f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Show hit rate breakdown in a compact format
+            st.markdown("##### 📊 Hit Rate Breakdown")
+            
+            # Create columns for the hit rates
+            hr_col1, hr_col2 = st.columns(2)
+            
+            with hr_col1:
+                st.metric("Last 5 Games", f"{hit_rates.get('L5', 0):.0f}%")
+                st.metric("Season", f"{hit_rates.get('Season', 0):.0f}%")
+            
+            with hr_col2:
+                st.metric("Last 10 Games", f"{hit_rates.get('L10', 0):.0f}%")
+                h2h_hr = hit_rates.get('H2H', 0)
+                st.metric("vs Opponent", f"{h2h_hr:.0f}%" if h2h_hr > 0 else "—")
+            
+            # Show comparison to original line if adjusted
+            if current_line != fd_line_val and fd_line_val is not None and hit_pct_val is not None:
+                hit_diff = hit_rate - hit_pct_val
+                st.caption(
+                    f"🔁 vs Original: {hit_diff:+.1f}% "
+                    f"(was {hit_pct_val:.0f}% @ {fd_line_val:.1f})"
+                )
 
     # ---- Head to head deep dive
     if h2h_games > 0 and stat_code != "DD":
@@ -1063,6 +1657,12 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
 # ─────────────────────────────
 # Build matchup table + live expanders
 # ─────────────────────────────
+# ─────────────────────────────
+# Build matchup table + live expanders
+# ─────────────────────────────
+# ─────────────────────────────
+# Build matchup table + live expanders
+# ─────────────────────────────
 def build_matchup_view(
     selected_game: dict,
     stat_code: str,
@@ -1089,8 +1689,7 @@ def build_matchup_view(
         st.subheader("👋 How to use this tool")
         st.markdown(
             """
-1. **Pick a matchup** on the left sidebar under *Select Upcoming Game*  
-2. **Pick a stat** (*Points*, *Rebounds*, *3PM*, etc.)  
+1. **Pick a matchup** on the left sidebar under *Select Upcoming Game* 2. **Pick a stat** (*Points*, *Rebounds*, *3PM*, etc.)  
 3. Watch the **Matchup Board** fill in player by player  
 4. Scroll down and **expand any player** to see the full deep dive (model projection, line vs projection edge, rest days, head-to-head, etc.)
 
@@ -1168,30 +1767,28 @@ No game is selected yet — choose one in the sidebar to start.
     total_players = len(combined_roster)
 
     # Pre-fetch FanDuel lines for this matchup (one call per matchup)
-    # If the Odds API credits die or something fails, these will just be {}
     event_id = get_event_id_for_game(home_team, away_team)
     if event_id:
         odds_data = fetch_fanduel_lines(event_id)
     else:
         odds_data = {}
 
-    # placeholders for streaming UI
-    table_placeholder = st.empty()         # board table so far
-    status_placeholder = st.empty()        # "Loaded X/Y"
-    st.markdown("---")
-    st.subheader("📂 Player Breakdowns (click any name below to expand)")
-    st.caption(
-        f"You can start opening players right away. "
-        f"We'll keep adding more below as they finish loading. "
-        f"({cur_season} vs {prev_season}, matchup context, line edge, trends, etc.)"
-    )
-    expanders_placeholder = st.empty()     # list of expanders so far
-
+    # Placeholders for data lists
     table_rows = []
     player_payloads = []
+    
+    # Status placeholder
+    status_placeholder = st.empty()
 
-    # stream each player
-    for _, prow in combined_roster.iterrows():
+    # ---
+    # STAGE 1: DATA COLLECTION LOOP
+    # We only build the data lists here. NO st.write, st.button, or UI.
+    # ---
+    for idx, prow in combined_roster.iterrows():
+        status_placeholder.write(
+            f"Loading {idx+1}/{total_players} players..."
+        )
+        
         player_name = prow["full_name"]
         pid = prow["player_id"]
         team_abbrev = prow["team_abbrev"]
@@ -1305,7 +1902,6 @@ No game is selected yet — choose one in the sidebar to start.
             adjusted_ou_short_table = ou_short
         
         # Generate a stable unique ID for this player/stat combination
-        # Store it in session state so it persists across renders (safely)
         stable_unique_id = get_or_create_stable_id(player_identifier, stat_code)
 
         # Store data for interactive table row
@@ -1314,8 +1910,10 @@ No game is selected yet — choose one in the sidebar to start.
             "player_display_name": player_display_name,
             "player_identifier": player_identifier,
             "stable_id": stable_unique_id,
+            "team_abbrev": team_abbrev,
             "team_pos": f"{team_abbrev} · {player_pos}",
             "proj": proj_display,
+            "proj_value": pred_val,  # Actual numeric value for calculations
             "fd_line_val": fd_line_val,
             "current_line": current_line_table,
             "hit_rate": adjusted_hit_rate_table,
@@ -1341,142 +1939,244 @@ No game is selected yet — choose one in the sidebar to start.
             "prediction": pred_val,
             "stat_code": stat_code,
             "stat_display": stat_display,
-            "player_id": player_identifier,  # Sanitised player identifier for session keys
-            "stable_unique_id": stable_unique_id,  # Stable ID for button keys
-
-            # sportsbook stuff to show in detail view
+            "player_id": player_identifier,
+            "stable_unique_id": stable_unique_id, 
             "fd_line_val": fd_line_val,
             "hit_pct_val": hit_pct_val,
             "edge_str": edge_str,
             "rec_text": rec_text,
         }
         player_payloads.append(pdata)
+    
+    # End of loop
+    status_placeholder.success(f"✅ Loaded all {total_players} players. Rendering UI...")
 
-        # re-render interactive table
-        table_placeholder.empty()
-        with table_placeholder.container():
-            st.markdown("""
-            <style>
-            .player-table-row {
-                padding: 8px;
-                border-bottom: 1px solid #e0e0e0;
-            }
-            </style>
-            """, unsafe_allow_html=True)
+    # ---
+    # STAGE 2: UI RENDERING
+    # Now that the loop is done, we draw the UI ONCE.
+    # ---
 
-            header_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
-            with header_cols[0]:
-                st.markdown("**Player**")
-            with header_cols[1]:
-                st.markdown("**Team/Pos**")
-            with header_cols[2]:
-                st.markdown("**Proj**")
-            with header_cols[3]:
-                st.markdown("**Line**")
-            with header_cols[4]:
-                st.markdown("**O/U**")
-            with header_cols[5]:
-                st.markdown("**Hit%**")
-            with header_cols[6]:
-                st.markdown("**Opp Def**")
+    # Draw the interactive table
+    st.markdown("""
+    <style>
+    .player-table-row {
+        padding: 8px;
+        border-bottom: 1px solid #e0e0e0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-            st.markdown("---")
+    header_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2, 0.8])
+    with header_cols[0]:
+        st.markdown("**Player**")
+    with header_cols[1]:
+        st.markdown("**Team/Pos**")
+    with header_cols[2]:
+        st.markdown("**Proj**")
+    with header_cols[3]:
+        st.markdown("**Line**")
+    with header_cols[4]:
+        st.markdown("**O/U**")
+    with header_cols[5]:
+        st.markdown("**Hit%**")
+    with header_cols[6]:
+        st.markdown("**Opp Def**")
+    with header_cols[7]:
+        st.markdown("**Add**")
 
-            for row_data in table_rows:
-                row_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2])
+    st.markdown("---")
 
-                with row_cols[0]:
-                    st.write(row_data["player_display_name"])
+    for idx, row_data in enumerate(table_rows):
+        row_cols = st.columns([2, 1.5, 1, 1.5, 1, 1, 2, 0.8])
 
-                with row_cols[1]:
-                    st.write(row_data["team_pos"])
+        with row_cols[0]:
+            st.write(row_data["player_display_name"])
 
-                with row_cols[2]:
-                    st.write(row_data["proj"])
+        with row_cols[1]:
+            st.write(row_data["team_pos"])
 
-                with row_cols[3]:
-                    if row_data["stat_code"] == "DD":
-                        st.write("—")
-                    else:
-                        player_identifier = row_data["player_identifier"]
-                        stable_id_row = row_data["stable_id"]
-                        current_line = row_data["current_line"]
+        with row_cols[2]:
+            st.write(row_data["proj"])
 
-                        if current_line is not None:
-                            line_btn_cols = st.columns([1, 2, 1])
-                            with line_btn_cols[0]:
-                                table_namespace = f"table::{stable_id_row}::{row_data['stat_code']}::dec"
-                                dec_token = _get_widget_token(table_namespace)
-                                btn_key = f"table_{dec_token}"
-                                if st.button("➖", key=btn_key, 
-                                             help="Decrease by 0.5"):
-                                    set_adjusted_line_value(player_identifier, row_data['stat_code'], current_line - 0.5)
-                                    st.rerun()
+        with row_cols[3]:
+            if row_data["stat_code"] == "DD":
+                st.write("—")
+            else:
+                player_identifier = row_data["player_identifier"]
+                stable_id_row = row_data["stable_id"]
+                current_line = row_data["current_line"]
+                
+                stable_id_for_key = str(stable_id_row).replace("-", "_").replace(".", "_").replace(" ", "_")
+                stat_code_safe = str(row_data['stat_code']).replace("-", "_")
+                
+                if current_line is not None:
+                    line_btn_cols = st.columns([1, 2, 1])
+                    with line_btn_cols[0]:
+                        # **FIXED KEY** (removed render_count)
+                        btn_key = f"tbl_dec_{stable_id_for_key}_{stat_code_safe}_{idx}"
+                        if st.button("➖", key=btn_key, help="Decrease by 0.5"):
+                            new_line = current_line - 0.5
+                            set_adjusted_line_value(player_identifier, row_data['stat_code'], new_line)
+                            st.rerun() # Rerun is fine here, loop is finished
+                    
+                    with line_btn_cols[1]:
+                        st.write(f"**{current_line:.1f}**")
+                        if current_line != row_data["fd_line_val"] and row_data["fd_line_val"] is not None:
+                            st.caption(f"({row_data['fd_line_val']:.1f})")
+                    
+                    with line_btn_cols[2]:
+                        # **FIXED KEY** (removed render_count)
+                        btn_key_inc = f"tbl_inc_{stable_id_for_key}_{stat_code_safe}_{idx}"
+                        if st.button("➕", key=btn_key_inc, help="Increase by 0.5"):
+                            new_line = current_line + 0.5
+                            set_adjusted_line_value(player_identifier, row_data['stat_code'], new_line)
+                            st.rerun() # Rerun is fine here, loop is finished
+                else:
+                    st.write("—")
 
-                            with line_btn_cols[1]:
-                                st.write(f"**{current_line:.1f}**")
-                                if current_line != row_data["fd_line_val"] and row_data["fd_line_val"] is not None:
-                                    st.caption(f"({row_data['fd_line_val']:.1f})")
+        with row_cols[4]:
+            st.write(row_data["ou_short"])
 
-                            with line_btn_cols[2]:
-                                table_namespace_inc = f"table::{stable_id_row}::{row_data['stat_code']}::inc"
-                                inc_token = _get_widget_token(table_namespace_inc)
-                                btn_key_inc = f"table_{inc_token}"
-                                if st.button("➕", key=btn_key_inc, 
-                                             help="Increase by 0.5"):
-                                    set_adjusted_line_value(player_identifier, row_data['stat_code'], current_line + 0.5)
-                                    st.rerun()
-                        else:
-                            st.write("—")
+        with row_cols[5]:
+            hit_rate = row_data["hit_rate"]
+            if hit_rate is not None:
+                hit_color = "🟢" if hit_rate >= 50 else "🔴" if hit_rate < 30 else "🟡"
+                st.write(f"{hit_color} **{hit_rate:.0f}%**")
+            else:
+                st.write("—")
 
-                with row_cols[4]:
-                    st.write(row_data["ou_short"])
+        with row_cols[6]:
+            st.write(row_data["opp_def"])
+        
+        with row_cols[7]:
+            # This is the "Add to Bet Sheet" button logic
+            player_identifier = row_data["player_identifier"]
+            stable_id_row = row_data["stable_id"]
+            current_line = row_data["current_line"]
+            stable_id_for_key = str(stable_id_row).replace("-", "_").replace(".", "_").replace(" ", "_")
+            stat_code_safe = str(row_data['stat_code']).replace("-", "_")
+            
+            # **FIXED KEY** (removed render_count)
+            add_btn_key = f"add_bet_{stable_id_for_key}_{stat_code_safe}_{idx}"
+            
+            button_clicked = st.button("➕", key=add_btn_key, help="Add to Bet Sheet", use_container_width=True)
+            
+            # This logic block is exactly the same as your file,
+            # but now it's guaranteed not to break the main UI loop.
+            if button_clicked:
+                if 'bet_sheet' not in st.session_state:
+                    st.session_state.bet_sheet = []
+                
+                proj_value = row_data.get("proj_value", 0) or 0
+                edge_str = row_data.get("ou_short", "—") or "—"
+                player_name = row_data.get("player_name", "Unknown Player") or "Unknown Player"
+                team_abbrev = row_data.get("team_abbrev", "") or ""
+                stat_code = row_data.get("stat_code", "PTS") or "PTS"
+                
+                hit_rates = {'L5': None, 'L10': None, 'Season': None}
+                try:
+                    combined_logs = row_data.get("current_logs", pd.DataFrame())
+                    if combined_logs.empty:
+                        combined_logs = row_data.get("prior_logs", pd.DataFrame())
+                    
+                    if current_line is not None and not combined_logs.empty and stat_code != "DD":
+                        hit_rates['L5'] = calc_hit_rate(combined_logs, stat_code, current_line, window=5)
+                        hit_rates['L10'] = calc_hit_rate(combined_logs, stat_code, current_line, window=10)
+                        if stat_code == "PRA" and {"PTS", "REB", "AST"}.issubset(combined_logs.columns):
+                            season_vals = combined_logs["PTS"] + combined_logs["REB"] + combined_logs["AST"]
+                            hits = (season_vals >= current_line).sum()
+                            hit_rates['Season'] = (hits / len(season_vals) * 100) if len(season_vals) > 0 else None
+                        elif stat_code in combined_logs.columns:
+                            hits = (combined_logs[stat_code] >= current_line).sum()
+                            hit_rates['Season'] = (hits / len(combined_logs) * 100) if len(combined_logs) > 0 else None
+                except:
+                    pass
+                
+                line_source = 'manual'
+                if current_line is not None:
+                    fd_line = row_data.get("fd_line_val")
+                    if fd_line is not None:
+                        line_source = 'adjusted' if abs(current_line - fd_line) > 0.01 else 'scraped'
+                
+                if current_line is not None and proj_value:
+                    try:
+                        edge_str, _, _ = calc_edge(proj_value, current_line)
+                    except:
+                        pass
+                
+                bet_id = get_bet_sheet_item_id(player_identifier, stat_code, current_line)
+                
+                bet_data = {
+                    'id': bet_id,
+                    'player_name': player_name,
+                    'player_id': player_identifier,
+                    'team_abbrev': team_abbrev,
+                    'stat_code': stat_code,
+                    'stat_display': stat_display,
+                    'projection': proj_value,
+                    'line': current_line,
+                    'line_source': line_source,
+                    'edge': edge_str,
+                    'stake': None,
+                    'hit_rates': hit_rates,
+                    'hit_rate_window': st.session_state.bet_sheet_settings.get('default_hit_rate_window', 'L10') if 'bet_sheet_settings' in st.session_state else 'L10',
+                    'timestamp': pd.Timestamp.now().isoformat()
+                }
+                
+                if 'bet_sheet' not in st.session_state:
+                    st.session_state.bet_sheet = []
+                
+                st.session_state.bet_sheet.append(bet_data)
+                
+                current_count = len(st.session_state.bet_sheet)
+                
+                if current_line is not None:
+                    toast_msg = f"Added {player_name} ({stat_display} {current_line:+.1f}) - Count: {current_count}"
+                else:
+                    toast_msg = f"Added {player_name} ({stat_display}) - Count: {current_count}"
+                
+                st.session_state.bet_sheet_toast = {
+                    'type': 'success',
+                    'message': toast_msg
+                }
+                
+                st.rerun()
 
-                with row_cols[5]:
-                    hit_rate = row_data["hit_rate"]
-                    if hit_rate is not None:
-                        hit_color = "🟢" if hit_rate >= 50 else "🔴" if hit_rate < 30 else "🟡"
-                        st.write(f"{hit_color} **{hit_rate:.0f}%**")
-                    else:
-                        st.write("—")
+    # ---
+    # Draw the expanders
+    # ---
+    st.markdown("---")
+    st.subheader("📂 Player Breakdowns (click any name below to expand)")
+    st.caption(
+        f"You can start opening players right away. "
+        f"({cur_season} vs {prev_season}, matchup context, line edge, trends, etc.)"
+    )
 
-                with row_cols[6]:
-                    st.write(row_data["opp_def"])
+    rendered_combinations = set()
+    for idx, info in enumerate(player_payloads):
+        player_id_check = info.get("player_id", None)
+        stat_code_check = info.get("stat_code", "")
 
-        # re-render ALL expanders so far
-        rendered_combinations = set()
-        expanders_placeholder.empty()
-        with expanders_placeholder.container():
-            for idx, info in enumerate(player_payloads):
-                player_id_check = info.get("player_id", None)
-                stat_code_check = info.get("stat_code", "")
+        if player_id_check is None:
+            continue
 
-                if player_id_check is None:
-                    continue
+        combo_key = (player_id_check, stat_code_check)
+        if combo_key in rendered_combinations:
+            continue
 
-                combo_key = (player_id_check, stat_code_check)
-                if combo_key in rendered_combinations:
-                    continue
+        rendered_combinations.add(combo_key)
 
-                rendered_combinations.add(combo_key)
+        roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
+        player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty else False
 
-                roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
-                player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty else False
+        expander_title = f"{'⭐️ ' if player_is_starter else ''}{info['player_name']} ({info['team_abbrev']} · {info['player_pos']})"
 
-                expander_title = f"{'⭐️ ' if player_is_starter else ''}{info['player_name']} ({info['team_abbrev']} · {info['player_pos']})"
-
-                with st.expander(expander_title, expanded=False):
-                    render_player_detail_body(info, cur_season, prev_season, render_index=idx)
-
-        # status line
-        status_placeholder.write(
-            f"Loaded {len(table_rows)}/{total_players} players..."
-        )
+        with st.expander(expander_title, expanded=False):
+            # Pass the render_index to ensure unique keys inside the expander
+            render_player_detail_body(info, cur_season, prev_season, render_index=idx)
 
     # final status
     status_placeholder.success("✅ Done.")
-
-
 def main():
     initialize_session_state_defaults()
 
@@ -1559,6 +2259,84 @@ def main():
     )
 
     # ─────────────────────────────
+    # Bet Sheet Sidebar
+    # ─────────────────────────────
+    initialize_bet_sheet()
+    
+    # Handle manual entry modal
+    if st.session_state.get('bet_sheet_show_manual_modal', False):
+        manual_entry = st.session_state.get('bet_sheet_manual_entry')
+        if manual_entry:
+            with st.expander("✏️ Enter Line Manually", expanded=True):
+                st.info(f"**{manual_entry['player_data']['player_name']}** - {manual_entry['stat_display']}")
+                st.caption("No line available. Please enter a line manually to add to bet sheet.")
+                
+                manual_line = st.number_input(
+                    "Enter line",
+                    min_value=0.0,
+                    step=0.5,
+                    key="manual_line_input"
+                )
+                
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    if st.button("✅ Add to Bet Sheet", key="confirm_manual_line", use_container_width=True):
+                        if manual_line > 0:
+                            # Calculate hit rates if we have game logs
+                            player_id = manual_entry['player_data']['player_id']
+                            player_name = manual_entry['player_data']['player_name']
+                            stat_code = manual_entry['player_data']['stat_code']
+                            
+                            # Get game logs for hit rate calculation
+                            current_logs = get_player_game_logs_cached_db(player_id, player_name, current_season) if player_name else pd.DataFrame()
+                            if current_logs is None or current_logs.empty:
+                                prior_logs = get_player_game_logs_cached_db(player_id, player_name, prior_season) if player_name else pd.DataFrame()
+                                combined_logs = prior_logs if not prior_logs.empty else pd.DataFrame()
+                            else:
+                                combined_logs = current_logs
+                            
+                            hit_rates = {}
+                            if not combined_logs.empty:
+                                hit_rates['L5'] = calc_hit_rate(combined_logs, stat_code, manual_line, window=5)
+                                hit_rates['L10'] = calc_hit_rate(combined_logs, stat_code, manual_line, window=10)
+                                # Season hit rate
+                                if stat_code == "PRA":
+                                    if {"PTS", "REB", "AST"}.issubset(combined_logs.columns):
+                                        season_vals = combined_logs["PTS"] + combined_logs["REB"] + combined_logs["AST"]
+                                        hits = (season_vals >= manual_line).sum()
+                                        hit_rates['Season'] = (hits / len(season_vals) * 100) if len(season_vals) > 0 else None
+                                else:
+                                    if stat_code in combined_logs.columns:
+                                        hits = (combined_logs[stat_code] >= manual_line).sum()
+                                        hit_rates['Season'] = (hits / len(combined_logs) * 100) if len(combined_logs) > 0 else None
+                            
+                            # Calculate edge
+                            proj = manual_entry.get('projection', 0)
+                            edge_str, _, _ = calc_edge(proj, manual_line) if proj else ("—", "—", "—")
+                            
+                            add_to_bet_sheet(
+                                player_data=manual_entry['player_data'],
+                                stat_display=manual_entry['stat_display'],
+                                projection=proj,
+                                line=manual_line,
+                                edge=edge_str,
+                                line_source='manual',
+                                hit_rates=hit_rates,
+                                allow_duplicate=st.session_state.bet_sheet_settings.get('allow_duplicates', False)
+                            )
+                            st.session_state.bet_sheet_show_manual_modal = False
+                            st.session_state.bet_sheet_manual_entry = None
+                            st.rerun()
+                
+                with col_btn2:
+                    if st.button("❌ Cancel", key="cancel_manual_line", use_container_width=True):
+                        st.session_state.bet_sheet_show_manual_modal = False
+                        st.session_state.bet_sheet_manual_entry = None
+                        st.rerun()
+    
+    render_bet_sheet_sidebar(current_season, prior_season)
+    
+    # ─────────────────────────────
     # Main render call
     # ─────────────────────────────
     build_matchup_view(
@@ -1584,6 +2362,372 @@ def main():
         "Always verify lines and context."
     )
 
+def render_bet_sheet_sidebar(cur_season, prev_season):
+    """
+    Render the bet sheet as a collapsible sidebar section.
+    """
+    # FORCE initialize - make absolutely sure it exists
+    if 'bet_sheet' not in st.session_state:
+        st.session_state.bet_sheet = []
+    if 'bet_sheet_settings' not in st.session_state:
+        st.session_state.bet_sheet_settings = {
+            'allow_duplicates': False,
+            'line_step_size': 0.5,
+            'default_hit_rate_window': 'L10'
+        }
+    if 'bet_sheet_toast' not in st.session_state:
+        st.session_state.bet_sheet_toast = None
+    
+    add_custom_css()
+    
+    # Get count - make sure we're reading the actual list
+    bet_sheet_list = st.session_state.get('bet_sheet', [])
+    bet_count = len(bet_sheet_list) if bet_sheet_list else 0
+    
+    # Render toast notification if present
+    if st.session_state.bet_sheet_toast:
+        toast = st.session_state.bet_sheet_toast
+        toast_class = f"toast-{toast['type']}"
+        st.markdown(f"""
+        <div class="toast-notification {toast_class}">
+            {toast['message']}
+        </div>
+        <script>
+            setTimeout(function() {{
+                var toast = document.querySelector('.toast-notification');
+                if (toast) toast.style.display = 'none';
+            }}, 3000);
+        </script>
+        """, unsafe_allow_html=True)
+        st.session_state.bet_sheet_toast = None
+    
+    # Bet Sheet section in sidebar - always expanded if there are items
+    with st.sidebar.expander(f"📋 Bet Sheet ({bet_count})", expanded=True):
+        if bet_count == 0:
+            st.info("Your bet sheet is empty. Add players from the matchup board using the ➕ button.")
+        else:
+            # Check if we're editing a specific item
+            editing_id = st.session_state.get('bet_sheet_editing')
+            if editing_id:
+                editing_bet = next((b for b in st.session_state.bet_sheet if b.get('id') == editing_id), None)
+                if editing_bet:
+                    with st.expander("✏️ Edit Bet Item", expanded=True):
+                        render_bet_item_edit_modal(editing_bet, cur_season, prev_season)
+                    st.markdown("---")
+            
+            # Sort and filter controls
+            sort_option = st.selectbox(
+                "Sort by",
+                ["Player Name", "Hit Rate", "Line", "Stat"],
+                key="bet_sheet_sort"
+            )
+            
+            # Bulk controls
+            col_bulk1, col_bulk2 = st.columns(2)
+            with col_bulk1:
+                if st.button("🗑️ Clear All", key="clear_all_bets", use_container_width=True):
+                    if st.session_state.get('confirm_clear', False):
+                        clear_bet_sheet()
+                        st.session_state.confirm_clear = False
+                    else:
+                        st.session_state.confirm_clear = True
+                        st.warning("Click again to confirm clearing all bets")
+                        st.rerun()
+            
+            with col_bulk2:
+                csv_data = export_bet_sheet_csv()
+                if csv_data:
+                    st.download_button(
+                        label="📥 Export",
+                        data=csv_data,
+                        file_name=f"bet_sheet_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv",
+                        key="export_bet_sheet",
+                        use_container_width=True
+                    )
+            
+            if st.session_state.get('confirm_clear', False):
+                st.session_state.confirm_clear = False
+            
+            st.markdown("---")
+            
+            # Sort bets - use the actual list from session state
+            sorted_bets = bet_sheet_list.copy() if bet_sheet_list else []
+            if sort_option == "Player Name":
+                sorted_bets.sort(key=lambda x: x['player_name'])
+            elif sort_option == "Hit Rate":
+                sorted_bets.sort(key=lambda x: x.get('hit_rates', {}).get('L10', 0) or 0, reverse=True)
+            elif sort_option == "Line":
+                sorted_bets.sort(key=lambda x: x.get('line', 0) or 0)
+            elif sort_option == "Stat":
+                sorted_bets.sort(key=lambda x: x['stat_display'])
+            
+            # Render each bet item (skip the one being edited)
+            for bet in sorted_bets:
+                if bet.get('id') != editing_id:
+                    render_bet_item(bet, cur_season, prev_season)
+
+
+def render_bet_item(bet, cur_season, prev_season):
+    """Render a single bet item row in the bet sheet."""
+    bet_id = bet.get('id', '')
+    player_name = bet['player_name']
+    team = bet['team_abbrev']
+    stat_display = bet['stat_display']
+    line = bet.get('line')
+    projection = bet.get('projection', 0)
+    edge = bet.get('edge', '—')
+    stake = bet.get('stake')
+    hit_rates = bet.get('hit_rates', {})
+    hit_rate_window = bet.get('hit_rate_window', 'L10')
+    
+    # Get current hit rate
+    current_hit_rate = hit_rates.get(hit_rate_window)
+    
+    # Bet item container
+    with st.container():
+        st.markdown(f"""
+        <div class="bet-sheet-item">
+        """, unsafe_allow_html=True)
+        
+        # Header row: Player name and remove button
+        col_header1, col_header2 = st.columns([4, 1])
+        with col_header1:
+            st.markdown(f"**{player_name}** ({team})")
+        with col_header2:
+            if st.button("🗑️", key=f"remove_{bet_id}_{int(time.time())}", help="Remove"):
+                remove_from_bet_sheet(bet_id)
+        
+        # Stat display
+        st.markdown(f"**{stat_display}**")
+        
+        # Line input/adjustment controls
+        if line is None:
+            # Show number input for entering line when line is None
+            new_line = st.number_input(
+                "Enter Line",
+                min_value=0.0,
+                value=0.0,
+                step=0.5,
+                key=f"enter_line_{bet_id}",
+                label_visibility="visible"
+            )
+            # Update when user enters a line (value > 0)
+            if new_line > 0:
+                update_bet_sheet_item(bet_id, {'line': new_line, 'line_source': 'manual'}, cur_season, prev_season)
+        else:
+            # Show +/- adjustment buttons when line exists
+            col_line1, col_line2, col_line3 = st.columns([1, 2, 1])
+            step_size = st.session_state.bet_sheet_settings.get('line_step_size', 0.5)
+            
+            with col_line1:
+                if st.button("➖", key=f"dec_line_{bet_id}", use_container_width=True):
+                    new_line = round(line - step_size, 1)
+                    update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+            
+            with col_line2:
+                # Use number_input for editable line display
+                edited_line = st.number_input(
+                    "Line",
+                    min_value=0.0,
+                    value=float(line),
+                    step=step_size,
+                    key=f"edit_line_{bet_id}",
+                    label_visibility="visible"
+                )
+                # Update if line changed
+                if abs(edited_line - line) > 0.01:
+                    update_bet_sheet_item(bet_id, {'line': edited_line}, cur_season, prev_season)
+            
+            with col_line3:
+                if st.button("➕", key=f"inc_line_{bet_id}", use_container_width=True):
+                    new_line = round(line + step_size, 1)
+                    update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+        
+        # Hit rate display
+        if current_hit_rate is not None:
+            hit_color = "🟢" if current_hit_rate >= 50 else "🔴" if current_hit_rate < 30 else "🟡"
+            st.markdown(f"{hit_color} **{current_hit_rate:.0f}%** ({hit_rate_window})")
+        else:
+            st.markdown("Hit Rate: —")
+        
+        # Hit rate window toggle
+        window_options = ['L5', 'L10', 'Season']
+        current_idx = window_options.index(hit_rate_window) if hit_rate_window in window_options else 1
+        new_window = st.radio(
+            "Window",
+            window_options,
+            index=current_idx,
+            horizontal=True,
+            key=f"window_{bet_id}",
+            label_visibility="collapsed"
+        )
+        if new_window != hit_rate_window:
+            update_bet_sheet_item(bet_id, {'hit_rate_window': new_window}, cur_season, prev_season)
+        
+        # Stake input
+        new_stake = st.number_input(
+            "Stake",
+            min_value=0.0,
+            value=float(stake) if stake else 0.0,
+            step=1.0,
+            key=f"stake_{bet_id}",
+            label_visibility="visible"
+        )
+        if abs(new_stake - (stake if stake else 0.0)) > 0.01:  # Use tolerance for float comparison
+            update_bet_sheet_item(bet_id, {'stake': new_stake if new_stake > 0 else None}, cur_season, prev_season)
+        
+        # Edit button
+        if st.button("✏️ Edit", key=f"edit_{bet_id}", use_container_width=True):
+            st.session_state.bet_sheet_editing = bet_id
+            st.rerun()
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("---")
+
+
+def render_bet_item_edit_modal(bet, cur_season, prev_season):
+    """Render the edit modal for a bet item."""
+    bet_id = bet.get('id', '')
+    
+    st.markdown("### ✏️ Edit Bet Item")
+    
+    # Player info (read-only)
+    st.info(f"**{bet['player_name']}** ({bet['team_abbrev']}) - {bet['stat_display']}")
+    
+    # Line editing with +/- buttons
+    st.markdown("#### Line Adjustment")
+    current_line = bet.get('line', 0)
+    step_size = st.session_state.bet_sheet_settings.get('line_step_size', 0.5)
+    
+    col_line1, col_line2, col_line3 = st.columns([1, 2, 1])
+    with col_line1:
+        if st.button("➖", key=f"modal_dec_{bet_id}", use_container_width=True):
+            new_line = round(current_line - step_size, 1)
+            update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+    
+    with col_line2:
+        new_line_input = st.number_input(
+            "Line",
+            min_value=0.0,
+            value=float(current_line) if current_line else 0.0,
+            step=step_size,
+            key=f"modal_line_{bet_id}"
+        )
+        if new_line_input != current_line:
+            update_bet_sheet_item(bet_id, {'line': new_line_input}, cur_season, prev_season)
+    
+    with col_line3:
+        if st.button("➕", key=f"modal_inc_{bet_id}", use_container_width=True):
+            new_line = round(current_line + step_size, 1)
+            update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+    
+    # Hit rate window selection
+    st.markdown("#### Hit Rate Window")
+    window_options = ['L5', 'L10', 'Season']
+    current_window = bet.get('hit_rate_window', 'L10')
+    new_window = st.radio(
+        "Select window",
+        window_options,
+        index=window_options.index(current_window) if current_window in window_options else 1,
+        key=f"modal_window_{bet_id}"
+    )
+    if new_window != current_window:
+        update_bet_sheet_item(bet_id, {'hit_rate_window': new_window})
+        st.rerun()
+    
+    # Display hit rate for current window
+    hit_rates = bet.get('hit_rates', {})
+    current_hit_rate = hit_rates.get(new_window)
+    if current_hit_rate is not None:
+        st.metric("Hit Rate", f"{current_hit_rate:.1f}%")
+    else:
+        st.info("Hit rate not available for this window")
+    
+    # Stake input
+    st.markdown("#### Stake")
+    current_stake = bet.get('stake')
+    new_stake = st.number_input(
+        "Stake amount",
+        min_value=0.0,
+        value=float(current_stake) if current_stake else 0.0,
+        step=1.0,
+        key=f"modal_stake_{bet_id}"
+    )
+    if new_stake != current_stake:
+        update_bet_sheet_item(bet_id, {'stake': new_stake if new_stake > 0 else None})
+    
+    # Sync to player checkbox (optional feature)
+    sync_to_player = st.checkbox(
+        "Sync line changes to player state",
+        value=False,
+        key=f"sync_{bet_id}",
+        help="If checked, line changes will also update the player's line in the main view"
+    )
+    
+    # Action buttons
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("💾 Save", key=f"save_{bet_id}", use_container_width=True, type="primary"):
+            if sync_to_player:
+                # Update player's adjusted line in session state
+                player_id = bet['player_id']
+                stat_code = bet['stat_code']
+                set_adjusted_line_value(player_id, stat_code, new_line_input)
+            st.session_state.bet_sheet_editing = None
+            st.session_state.bet_sheet_toast = {
+                'type': 'success',
+                'message': 'Bet item updated'
+            }
+            st.rerun()
+    
+    with col_btn2:
+        if st.button("❌ Cancel", key=f"cancel_{bet_id}", use_container_width=True):
+            st.session_state.bet_sheet_editing = None
+            st.rerun()
+    
+    # Show current values summary
+    st.markdown("---")
+    st.markdown("#### Current Values")
+    col_sum1, col_sum2, col_sum3 = st.columns(3)
+    with col_sum1:
+        st.metric("Line", f"{new_line_input:.1f}")
+    with col_sum2:
+        st.metric("Stake", f"${new_stake:.0f}" if new_stake > 0 else "—")
+    with col_sum3:
+        hr_display = f"{current_hit_rate:.1f}%" if current_hit_rate is not None else "—"
+        st.metric(f"Hit Rate ({new_window})", hr_display)
+
+
+def render_bet_sheet():
+    """Render the bet sheet as a full page (for navigation)."""
+    st.title("📋 Your Bet Sheet")
+    
+    initialize_bet_sheet()
+    
+    # Back button
+    if st.button("⬅️ Back to Matchup Board"):
+        st.session_state.current_page = 'matchup_board'
+        st.rerun()
+    
+    st.markdown("---")
+    
+    if not st.session_state.bet_sheet:
+        st.info("Your bet sheet is empty. Add players from the Matchup Board.")
+        return
+    
+    # Check if we're editing a specific item
+    editing_id = st.session_state.get('bet_sheet_editing')
+    if editing_id:
+        editing_bet = next((b for b in st.session_state.bet_sheet if b.get('id') == editing_id), None)
+        if editing_bet:
+            with st.expander("✏️ Edit Bet Item", expanded=True):
+                render_bet_item_edit_modal(editing_bet, current_season, prior_season)
+            st.markdown("---")
+    
+    # Display all bets
+    for bet in st.session_state.bet_sheet:
+        render_bet_item(bet, current_season, prior_season)
 
 if __name__ == "__main__":
     main()

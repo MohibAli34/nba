@@ -110,7 +110,7 @@ def init_database():
     
     conn.commit()
     conn.close()
-    print("✅ Database initialized successfully")
+    print("[OK] Database initialized successfully")
 
 
 # ---------- PLAYER GAME LOG CACHE ----------
@@ -164,11 +164,11 @@ def get_cached_player_game_logs(player_id, season):
         
         df = df.rename(columns=column_map)
         
-        print(f"✅ Loaded {len(df)} games for player {player_id} from cache ({season})")
+        print(f"[OK] Loaded {len(df)} games for player {player_id} from cache ({season})")
         return df
         
     except Exception as e:
-        print(f"❌ Error loading from cache: {e}")
+        print(f"[ERROR] Error loading from cache: {e}")
         conn.close()
         return None
 
@@ -223,12 +223,12 @@ def save_player_game_logs(player_id, player_name, season, game_logs_df):
                 int(row.get('PLUS_MINUS', 0))
             ))
         except Exception as e:
-            print(f"⚠️ Error saving game row for {player_id}: {e}")
+            print(f"[WARN] Error saving game row for {player_id}: {e}")
             continue
     
     conn.commit()
     conn.close()
-    print(f"💾 Saved {len(game_logs_df)} games for {player_id} / {season}")
+    print(f"[OK] Saved {len(game_logs_df)} games for {player_id} / {season}")
 
 
 def get_last_game_date(player_id, season):
@@ -283,7 +283,7 @@ def save_team_stats(team_abbrev, season, stats_df):
     
     conn.commit()
     conn.close()
-    print(f"💾 Saved team stats for {team_abbrev} / {season}")
+    print(f"[OK] Saved team stats for {team_abbrev} / {season}")
 
 
 def get_cached_team_stats(season):
@@ -311,7 +311,7 @@ def get_cached_team_stats(season):
         # freshness: we consider >24h stale
         latest_update = max([pd.to_datetime(r[2]) for r in results])
         if datetime.now() - latest_update > timedelta(hours=24):
-            print("⚠️ Team stats cache is stale (>24h)")
+            print("[WARN] Team stats cache is stale (>24h)")
             return None
         
         all_rows = []
@@ -320,11 +320,11 @@ def get_cached_team_stats(season):
             all_rows.extend(parsed)
         
         df = pd.DataFrame(all_rows)
-        print(f"✅ Loaded cached team stats for season {season} ({len(df)} rows)")
+        print(f"[OK] Loaded cached team stats for season {season} ({len(df)} rows)")
         return df
         
     except Exception as e:
-        print(f"❌ Error loading cached team stats: {e}")
+        print(f"[ERROR] Error loading cached team stats: {e}")
         return None
 
 
@@ -364,7 +364,7 @@ def save_defense_vs_position(df):
     
     conn.commit()
     conn.close()
-    print(f"💾 Saved defense vs position data ({len(df)} rows)")
+    print(f"[OK] Saved defense vs position data ({len(df)} rows)")
 
 
 def get_cached_defense_vs_position():
@@ -390,7 +390,7 @@ def get_cached_defense_vs_position():
         latest_update = pd.to_datetime(df['last_updated'].max())
         # treat older than 7 days as stale
         if datetime.now() - latest_update > timedelta(days=7):
-            print("⚠️ Defense-vs-position cache is stale (>7d)")
+            print("[WARN] Defense-vs-position cache is stale (>7d)")
             return None
         
         # rename columns back to what code expects
@@ -411,11 +411,11 @@ def get_cached_defense_vs_position():
         
         df = df.drop(columns=['last_updated'])
         
-        print(f"✅ Loaded defense vs position from cache ({len(df)} rows)")
+        print(f"[OK] Loaded defense vs position from cache ({len(df)} rows)")
         return df
         
     except Exception as e:
-        print(f"❌ Error loading defense-vs-position cache: {e}")
+        print(f"[ERROR] Error loading defense-vs-position cache: {e}")
         conn.close()
         return None
 
@@ -467,7 +467,7 @@ def save_player_metadata(player_id, player_name, position, team):
     
     conn.commit()
     conn.close()
-    print(f"💾 Saved player_metadata for {player_id}: {player_name}, {position}, {team}")
+    print(f"[OK] Saved player_metadata for {player_id}: {player_name}, {position}, {team}")
 
 
 # ---------- STATS ABOUT CACHE ----------
@@ -501,10 +501,10 @@ def clear_cache():
     """Delete the entire sqlite file and recreate schema."""
     if os.path.exists(DATABASE_PATH):
         os.remove(DATABASE_PATH)
-        print("✅ Cache cleared (DB file deleted)")
+        print("[OK] Cache cleared (DB file deleted)")
         init_database()
     else:
-        print("⚠️ No cache DB to clear")
+        print("[WARN] No cache DB to clear")
 
 
 def clear_old_seasons(keep_seasons):

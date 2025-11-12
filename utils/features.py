@@ -157,7 +157,7 @@ def get_opponent_defensive_stats(opponent_abbrev, team_stats_df, recent_games_df
         opp_rows = team_stats_df[team_stats_df['TEAM_ABBREVIATION'] == opp_code]
     else:
         # We don't have a usable team key -> fall back
-        print("⚠️ TEAM_ABBREVIATION column missing in team_stats_df")
+        print("[WARN] TEAM_ABBREVIATION column missing in team_stats_df")
         opp_rows = pd.DataFrame()
 
     if opp_rows.empty:
@@ -168,7 +168,7 @@ def get_opponent_defensive_stats(opponent_abbrev, team_stats_df, recent_games_df
 
     if opp_rows.empty:
         # no match, bail with defaults
-        print(f"⚠️ Could not match opponent {opp_code} in team_stats_df")
+        print(f"[WARN] Could not match opponent {opp_code} in team_stats_df")
         return {
             'def_rating': DEFAULT_DEF_RATING,
             'pace': DEFAULT_PACE,
