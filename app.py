@@ -854,8 +854,8 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
 
     
     # Initialize or get adjusted line from session state (safely)
-   
-    current_line = safe_get_adjusted_line(player_identifier, stat_code, fd_line_val)
+    current_line = st.session_state.get(f"line_{player_identifier}_{stat_code}", fd_line_val or 0.0)
+
 
     # Handle button clicks
     button_col1, button_col2, button_col3 = st.columns([1, 2, 1])
@@ -864,10 +864,8 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
         if st.button("➖", key=decrease_key, help="Decrease line by 0.5", use_container_width=True):
             if current_line is not None:
                 new_value = current_line - 0.5
-                set_adjusted_line_value(player_identifier, stat_code, new_value)
-                if fd_line_val is None:
-                    set_manual_line_value(player_identifier, stat_code, new_value)
-                st.rerun()
+                st.session_state[f"line_{player_identifier}_{stat_code}"] = new_value
+
 
     with button_col2:
         if stat_code == "DD":
@@ -880,21 +878,15 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
                 st.markdown(f"**Current Line:** **{current_line:.1f}**")
                 if current_line != fd_line_val:
                     if st.button("🔄 Reset", key=reset_key, use_container_width=True):
-                        if fd_line_val is not None:
-                            set_adjusted_line_value(player_identifier, stat_code, fd_line_val)
-                        else:
-                            reset_adjusted_line_value(player_identifier, stat_code)
-                            set_manual_line_value(player_identifier, stat_code, 0.0)
-                        st.rerun()
+                        st.session_state[f"line_{player_identifier}_{stat_code}"] = fd_line_val or 0.0
+
 
     with button_col3:
         if st.button("➕", key=increase_key, help="Increase line by 0.5", use_container_width=True):
             if current_line is not None:
                 new_value = current_line + 0.5
-                set_adjusted_line_value(player_identifier, stat_code, new_value)
-                if fd_line_val is None:
-                    set_manual_line_value(player_identifier, stat_code, new_value)
-                st.rerun()
+                st.session_state[f"line_{player_identifier}_{stat_code}"] = new_value
+
 
     # Manual line input option (if no line available)
     if current_line is None and stat_code != "DD":
