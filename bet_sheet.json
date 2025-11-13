@@ -1,5 +1,86 @@
 {
-  "bet_sheet": [],
+  "bet_sheet": [
+    {
+      "id": "1629622_PTS_1.0_1763013909934",
+      "player_name": "Max Strus",
+      "player_id": "1629622",
+      "team_abbrev": "CLE",
+      "stat_code": "PTS",
+      "stat_display": "Points",
+      "projection": 11.43506,
+      "line": 1.0,
+      "line_source": "manual",
+      "edge": "+10.4 (+1043.5%)",
+      "stake": null,
+      "hit_rates": {
+        "L5": 100.0,
+        "L10": 100.0,
+        "Season": 100.0
+      },
+      "hit_rate_window": "L10",
+      "timestamp": "2025-11-13T11:05:09.934905"
+    },
+    {
+      "id": "1628366_PTS_0.5_1763013937945",
+      "player_name": "Lonzo Ball",
+      "player_id": "1628366",
+      "team_abbrev": "CLE",
+      "stat_code": "PTS",
+      "stat_display": "Points",
+      "projection": 8.110285714285714,
+      "line": 0.5,
+      "line_source": "manual",
+      "edge": "+7.6 (+1522.1%)",
+      "stake": null,
+      "hit_rates": {
+        "L5": 100.0,
+        "L10": 100.0,
+        "Season": 100.0
+      },
+      "hit_rate_window": "L10",
+      "timestamp": "2025-11-13T11:05:37.945551"
+    },
+    {
+      "id": "1629622_PTS_0.0_1763017029396",
+      "player_name": "Max Strus",
+      "player_id": "1629622",
+      "team_abbrev": "CLE",
+      "stat_code": "PTS",
+      "stat_display": "Points",
+      "projection": 11.43506,
+      "line": 0.0,
+      "line_source": "manual",
+      "edge": "+11.4 (+0.0%)",
+      "stake": null,
+      "hit_rates": {
+        "L5": 100.0,
+        "L10": 100.0,
+        "Season": 100.0
+      },
+      "hit_rate_window": "L10",
+      "timestamp": "2025-11-13T11:57:09.396782"
+    },
+    {
+      "id": "1629622_PTS_0.0_1763019595294",
+      "player_name": "Max Strus",
+      "player_id": "1629622",
+      "team_abbrev": "CLE",
+      "stat_code": "PTS",
+      "stat_display": "Points",
+      "projection": 11.43506,
+      "line": 0.0,
+      "line_source": "manual",
+      "edge": "+11.4 (+0.0%)",
+      "stake": null,
+      "hit_rates": {
+        "L5": 20.0,
+        "L10": 10.0,
+        "Season": 30.0
+      },
+      "hit_rate_window": "L10",
+      "timestamp": "2025-11-13T12:39:55.294069"
+    }
+  ],
   "bet_sheet_settings": {
     "allow_duplicates": false,
     "line_step_size": 0.5,

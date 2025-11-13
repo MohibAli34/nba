@@ -1,4 +1,4 @@
-# bhosderchod streamlit 
+# mohib bhosarchoot
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -127,34 +127,89 @@ def safe_get_adjusted_line(player_identifier, stat_code, fd_line_val):
         return fd_line_val  # fallback if Streamlit session not ready
     return get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
 
+def _get_stat_series_for_hit_rate(game_logs: pd.DataFrame, stat_code: str):
+    if game_logs is None or game_logs.empty:
+        return None
+
+    stat_key = (stat_code or "").upper()
+
+    if stat_key == "PRA":
+        required_cols = {"PTS", "REB", "AST"}
+        if not required_cols.issubset(game_logs.columns):
+            return None
+        return game_logs["PTS"] + game_logs["REB"] + game_logs["AST"]
+
+    if stat_key in game_logs.columns:
+        return game_logs[stat_key]
+
+    return None
+
+
+def _calc_hit_rate_threshold(
+    game_logs: pd.DataFrame,
+    stat_code: str,
+    threshold_value: float,
+    window: int | None = None,
+    denominator: int | None = None,
+):
+    if game_logs is None or game_logs.empty:
+        return None
+    if threshold_value is None:
+        return None
+
+    stat_series = _get_stat_series_for_hit_rate(game_logs, stat_code)
+    if stat_series is None:
+        return None
+
+    if window is not None:
+        stat_series = stat_series.head(window)
+
+    if stat_series.empty:
+        return None
+
+    hits = (stat_series > threshold_value).sum()
+
+    if denominator is None:
+        denominator = window if window is not None else len(stat_series)
+
+    if denominator is None or denominator <= 0:
+        denominator = len(stat_series)
+
+    if denominator <= 0:
+        return None
+
+    return (hits / denominator) * 100.0
+
+
 def calc_hit_rate(game_logs: pd.DataFrame, stat_col: str, line_value: float, window: int = 10):
     """
     % of last `window` games the player went OVER line_value for stat_col.
     If not enough data or no line, return None.
     """
-    if game_logs is None or game_logs.empty:
-        return None
-    if line_value is None:
-        return None
+    return _calc_hit_rate_threshold(
+        game_logs,
+        stat_col,
+        line_value,
+        window=window,
+        denominator=window,
+    )
 
-    # last N games (most recent at head() because nba_api returns reverse-chronological)
-    recent = game_logs.head(window).copy()
 
-    if stat_col == "PRA":
-        if not {"PTS", "REB", "AST"}.issubset(recent.columns):
-            return None
-        recent_vals = recent["PTS"] + recent["REB"] + recent["AST"]
-    else:
-        if stat_col not in recent.columns:
-            return None
-        recent_vals = recent[stat_col]
-
-    if len(recent_vals) == 0:
-        return None
-
-    hits = (recent_vals > line_value).sum()
-    rate = hits / len(recent_vals)
-    return rate * 100.0
+def calc_hit_rate_vs_projection(
+    game_logs: pd.DataFrame,
+    stat_col: str,
+    projection_value: float,
+    window: int | None = None,
+    denominator: int | None = None,
+):
+    """Hit rate versus the player's projection instead of the sportsbook line."""
+    return _calc_hit_rate_threshold(
+        game_logs,
+        stat_col,
+        projection_value,
+        window=window,
+        denominator=denominator,
+    )
 
 
 def calc_edge(prediction: float, line_value: float):
@@ -611,7 +666,8 @@ def get_bet_sheet_item_id(player_id, stat_code, line):
     if line is None:
         # Use timestamp for unique ID when line is None
         return f"{player_id}_{stat_code}_{int(time.time() * 1000)}"
-    return f"{player_id}_{stat_code}_{line:.1f}"
+    # Always include timestamp to ensure uniqueness even for same player+stat+line
+    return f"{player_id}_{stat_code}_{line:.1f}_{int(time.time() * 1000)}"
 
 
 def add_to_bet_sheet(player_data, stat_display, projection, line, edge, 
@@ -631,12 +687,11 @@ def add_to_bet_sheet(player_data, stat_display, projection, line, edge,
     """
     initialize_bet_sheet()
     
-    # Create bet item (line can be None)
-    bet_id = get_bet_sheet_item_id(player_data['player_id'], player_data['stat_code'], line)
-    
-    # Check for duplicates (check by player+stat+line combination)
-    # For None lines, we allow duplicates since user will set line later
-    if not allow_duplicate and line is not None:
+    # Check for exact duplicates (same player + stat + line)
+    # Allow duplicates only if stat OR line is different
+    # Prevent only if player, stat, AND line are all the same
+    if line is not None:
+        # Check for exact duplicate: same player, same stat, same line
         existing = next((i for i, bet in enumerate(st.session_state.bet_sheet) 
                         if (bet.get('player_id') == player_data['player_id'] and 
                             bet.get('stat_code') == player_data['stat_code'] and
@@ -650,6 +705,22 @@ def add_to_bet_sheet(player_data, stat_display, projection, line, edge,
             }
             st.rerun()
             return
+    else:
+        # For None lines, check if there's already an entry with same player+stat+None line
+        existing = next((i for i, bet in enumerate(st.session_state.bet_sheet) 
+                        if (bet.get('player_id') == player_data['player_id'] and 
+                            bet.get('stat_code') == player_data['stat_code'] and
+                            bet.get('line') is None)), None)
+        if existing is not None and not allow_duplicate:
+            st.session_state.bet_sheet_toast = {
+                'type': 'info',
+                'message': f"Already in bet sheet: {player_data['player_name']} ({stat_display}) - Please set line first"
+            }
+            st.rerun()
+            return
+    
+    # Create bet item (line can be None) - generate unique ID
+    bet_id = get_bet_sheet_item_id(player_data['player_id'], player_data['stat_code'], line)
     
     bet_data = {
         'id': bet_id,
@@ -703,8 +774,9 @@ def recalculate_hit_rates_for_bet(bet, cur_season, prev_season):
     player_name = bet.get('player_name')
     stat_code = bet.get('stat_code')
     line = bet.get('line')
-    
-    if line is None or stat_code == "DD":
+    projection_value = bet.get('projection')
+
+    if projection_value is None or stat_code == "DD":
         return bet.get('hit_rates', {})
     
     # Get game logs
@@ -718,22 +790,12 @@ def recalculate_hit_rates_for_bet(bet, cur_season, prev_season):
     if combined_logs.empty:
         return bet.get('hit_rates', {})
     
-    # Calculate hit rates for all windows
+    # Calculate hit rates for all windows using the projection value
     hit_rates = {}
-    hit_rates['L5'] = calc_hit_rate(combined_logs, stat_code, line, window=5)
-    hit_rates['L10'] = calc_hit_rate(combined_logs, stat_code, line, window=10)
-    
-    # Season hit rate
-    if stat_code == "PRA":
-        if {"PTS", "REB", "AST"}.issubset(combined_logs.columns):
-            season_vals = combined_logs["PTS"] + combined_logs["REB"] + combined_logs["AST"]
-            hits = (season_vals >= line).sum()
-            hit_rates['Season'] = (hits / len(season_vals) * 100) if len(season_vals) > 0 else None
-    else:
-        if stat_code in combined_logs.columns:
-            hits = (combined_logs[stat_code] >= line).sum()
-            hit_rates['Season'] = (hits / len(combined_logs) * 100) if len(combined_logs) > 0 else None
-    
+    hit_rates['L5'] = calc_hit_rate_vs_projection(combined_logs, stat_code, projection_value, window=5, denominator=5)
+    hit_rates['L10'] = calc_hit_rate_vs_projection(combined_logs, stat_code, projection_value, window=10, denominator=20)
+    hit_rates['Season'] = calc_hit_rate_vs_projection(combined_logs, stat_code, projection_value)
+
     return hit_rates
 
 
@@ -742,9 +804,10 @@ def update_bet_sheet_item(bet_id, updates, cur_season=None, prev_season=None):
     initialize_bet_sheet()
     for i, bet in enumerate(st.session_state.bet_sheet):
         if bet.get('id') == bet_id:
-            # If line is being updated, recalculate hit rates
+            # If line is being updated, ensure it's not negative and recalculate hit rates
             if 'line' in updates and cur_season and prev_season:
-                new_line = updates['line']
+                new_line = max(0.0, updates['line'])  # Prevent negative values
+                updates['line'] = new_line
                 bet_copy = bet.copy()
                 bet_copy['line'] = new_line
                 new_hit_rates = recalculate_hit_rates_for_bet(bet_copy, cur_season, prev_season)
@@ -1455,7 +1518,7 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
                       help=f"Decrease line by {step_size}", 
                       use_container_width=True):
             if current_line is not None:
-                new_value = round(current_line - step_size, 1)
+                new_value = max(0.0, round(current_line - step_size, 1))  # Prevent negative values
                 set_adjusted_line_value(player_identifier, stat_code, new_value)
                 st.rerun()
     
@@ -1481,8 +1544,9 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
                     label_visibility="collapsed"
                 )
                 
-                # Update if changed
+                # Update if changed (ensure non-negative)
                 if current_line is not None and abs(new_line - current_line) > 0.01:
+                    new_line = max(0.0, new_line)  # Prevent negative values
                     set_adjusted_line_value(player_identifier, stat_code, new_line)
                     st.rerun()
     
@@ -1510,6 +1574,7 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
             
             if st.form_submit_button("Apply Manual Line"):
                 if manual_line > 0:
+                    manual_line = max(0.0, manual_line)  # Ensure non-negative
                     set_manual_line_value(player_identifier, stat_code, manual_line)
                     set_adjusted_line_value(player_identifier, stat_code, manual_line)
                     st.rerun()
@@ -1967,13 +2032,17 @@ No game is selected yet — choose one in the sidebar to start.
         # Get or initialize adjusted line from session state (safely)
         current_line_table = get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
         
-        # Recalculate hit rate based on adjusted line
+        logs_for_hits = current_logs if not current_logs.empty else prior_logs
+
+        hit_rate_l5 = hit_rate_l10 = hit_rate_season = None
+        if stat_code != "DD" and pred_val is not None and logs_for_hits is not None and not logs_for_hits.empty:
+            hit_rate_l5 = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val, window=5, denominator=5)
+            hit_rate_l10 = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val, window=10, denominator=20)
+            hit_rate_season = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val)
+
         if current_line_table is not None and stat_code != "DD":
-            combined_logs_for_hit_table = current_logs if not current_logs.empty else prior_logs
-            adjusted_hit_rate_table = calc_hit_rate(combined_logs_for_hit_table, stat_code, current_line_table, window=10)
-            adjusted_edge_str_table, adjusted_rec_text_table, adjusted_ou_short_table = calc_edge(pred_val, current_line_table)
+            adjusted_edge_str_table, _, adjusted_ou_short_table = calc_edge(pred_val, current_line_table)
         else:
-            adjusted_hit_rate_table = hit_pct_val
             adjusted_edge_str_table = edge_str
             adjusted_ou_short_table = ou_short
         
@@ -1992,7 +2061,10 @@ No game is selected yet — choose one in the sidebar to start.
             "proj_value": pred_val,  # Actual numeric value for calculations
             "fd_line_val": fd_line_val,
             "current_line": current_line_table,
-            "hit_rate": adjusted_hit_rate_table,
+            "hit_rate": hit_rate_l10 if hit_rate_l10 is not None else hit_pct_val,
+            "hit_rate_l5": hit_rate_l5,
+            "hit_rate_l10": hit_rate_l10,
+            "hit_rate_season": hit_rate_season,
             "ou_short": adjusted_ou_short_table,
             "opp_def": opp_def_display,
             "stat_code": stat_code,
@@ -2091,7 +2163,7 @@ No game is selected yet — choose one in the sidebar to start.
                         # **FIXED KEY** (removed render_count)
                         btn_key = f"tbl_dec_{stable_id_for_key}_{stat_code_safe}_{idx}"
                         if st.button("➖", key=btn_key, help="Decrease by 0.5"):
-                            new_line = current_line - 0.5
+                            new_line = max(0.0, current_line - 0.5)  # Prevent negative values
                             set_adjusted_line_value(player_identifier, row_data['stat_code'], new_line)
                             st.rerun() # Rerun is fine here, loop is finished
                     
@@ -2111,15 +2183,45 @@ No game is selected yet — choose one in the sidebar to start.
                     st.write("—")
 
         with row_cols[4]:
-            st.write(row_data["ou_short"])
+            # Show O/U as difference between projection and line
+            proj_val = row_data.get("proj_value", 0)
+            current_line_ou = row_data.get("current_line")
+            if current_line_ou is not None and proj_val is not None:
+                diff = proj_val - current_line_ou
+                ou_display = f"{diff:+.1f}"
+            else:
+                ou_display = row_data.get("ou_short", "—")
+            st.write(ou_display)
 
         with row_cols[5]:
-            hit_rate = row_data["hit_rate"]
-            if hit_rate is not None:
-                hit_color = "🟢" if hit_rate >= 50 else "🔴" if hit_rate < 30 else "🟡"
-                st.write(f"{hit_color} **{hit_rate:.0f}%**")
-            else:
-                st.write("—")
+            # Hit rate with tabs for L5, L10, Season
+            hit_rate_l5 = row_data.get("hit_rate_l5")
+            hit_rate_l10 = row_data.get("hit_rate_l10")
+            hit_rate_season = row_data.get("hit_rate_season")
+            
+            # Tabs for selecting hit rate window
+            window_tabs = st.tabs(["L5", "L10", "Season"])
+            
+            with window_tabs[0]:
+                if hit_rate_l5 is not None:
+                    hit_color = "🟢" if hit_rate_l5 >= 50 else "🔴" if hit_rate_l5 < 30 else "🟡"
+                    st.write(f"{hit_color} **{hit_rate_l5:.0f}%**")
+                else:
+                    st.write("—")
+            
+            with window_tabs[1]:
+                if hit_rate_l10 is not None:
+                    hit_color = "🟢" if hit_rate_l10 >= 50 else "🔴" if hit_rate_l10 < 30 else "🟡"
+                    st.write(f"{hit_color} **{hit_rate_l10:.0f}%**")
+                else:
+                    st.write("—")
+            
+            with window_tabs[2]:
+                if hit_rate_season is not None:
+                    hit_color = "🟢" if hit_rate_season >= 50 else "🔴" if hit_rate_season < 30 else "🟡"
+                    st.write(f"{hit_color} **{hit_rate_season:.0f}%**")
+                else:
+                    st.write("—")
 
         with row_cols[6]:
             st.write(row_data["opp_def"])
@@ -2149,24 +2251,28 @@ No game is selected yet — choose one in the sidebar to start.
                 team_abbrev = row_data.get("team_abbrev", "") or ""
                 stat_code = row_data.get("stat_code", "PTS") or "PTS"
                 
-                hit_rates = {'L5': None, 'L10': None, 'Season': None}
-                try:
-                    combined_logs = row_data.get("current_logs", pd.DataFrame())
-                    if combined_logs.empty:
-                        combined_logs = row_data.get("prior_logs", pd.DataFrame())
-                    
-                    if current_line is not None and not combined_logs.empty and stat_code != "DD":
-                        hit_rates['L5'] = calc_hit_rate(combined_logs, stat_code, current_line, window=5)
-                        hit_rates['L10'] = calc_hit_rate(combined_logs, stat_code, current_line, window=10)
-                        if stat_code == "PRA" and {"PTS", "REB", "AST"}.issubset(combined_logs.columns):
-                            season_vals = combined_logs["PTS"] + combined_logs["REB"] + combined_logs["AST"]
-                            hits = (season_vals >= current_line).sum()
-                            hit_rates['Season'] = (hits / len(season_vals) * 100) if len(season_vals) > 0 else None
-                        elif stat_code in combined_logs.columns:
-                            hits = (combined_logs[stat_code] >= current_line).sum()
-                            hit_rates['Season'] = (hits / len(combined_logs) * 100) if len(combined_logs) > 0 else None
-                except:
-                    pass
+                hit_rates = {
+                    'L5': row_data.get('hit_rate_l5'),
+                    'L10': row_data.get('hit_rate_l10'),
+                    'Season': row_data.get('hit_rate_season'),
+                }
+                if stat_code != "DD" and proj_value is not None:
+                    needs_l5 = hit_rates['L5'] is None
+                    needs_l10 = hit_rates['L10'] is None
+                    needs_season = hit_rates['Season'] is None
+
+                    if needs_l5 or needs_l10 or needs_season:
+                        combined_logs = row_data.get("current_logs", pd.DataFrame())
+                        if combined_logs.empty:
+                            combined_logs = row_data.get("prior_logs", pd.DataFrame())
+
+                        if not combined_logs.empty:
+                            if needs_l5:
+                                hit_rates['L5'] = calc_hit_rate_vs_projection(combined_logs, stat_code, proj_value, window=5, denominator=5)
+                            if needs_l10:
+                                hit_rates['L10'] = calc_hit_rate_vs_projection(combined_logs, stat_code, proj_value, window=10, denominator=20)
+                            if needs_season:
+                                hit_rates['Season'] = calc_hit_rate_vs_projection(combined_logs, stat_code, proj_value)
                 
                 line_source = 'manual'
                 if current_line is not None:
@@ -2375,28 +2481,20 @@ def main():
                                 combined_logs = current_logs
                             
                             hit_rates = {}
-                            if not combined_logs.empty:
-                                hit_rates['L5'] = calc_hit_rate(combined_logs, stat_code, manual_line, window=5)
-                                hit_rates['L10'] = calc_hit_rate(combined_logs, stat_code, manual_line, window=10)
-                                # Season hit rate
-                                if stat_code == "PRA":
-                                    if {"PTS", "REB", "AST"}.issubset(combined_logs.columns):
-                                        season_vals = combined_logs["PTS"] + combined_logs["REB"] + combined_logs["AST"]
-                                        hits = (season_vals >= manual_line).sum()
-                                        hit_rates['Season'] = (hits / len(season_vals) * 100) if len(season_vals) > 0 else None
-                                else:
-                                    if stat_code in combined_logs.columns:
-                                        hits = (combined_logs[stat_code] >= manual_line).sum()
-                                        hit_rates['Season'] = (hits / len(combined_logs) * 100) if len(combined_logs) > 0 else None
+                            projection_value = manual_entry.get('projection')
+                            if projection_value is not None and not combined_logs.empty:
+                                hit_rates['L5'] = calc_hit_rate_vs_projection(combined_logs, stat_code, projection_value, window=5, denominator=5)
+                                hit_rates['L10'] = calc_hit_rate_vs_projection(combined_logs, stat_code, projection_value, window=10, denominator=20)
+                                hit_rates['Season'] = calc_hit_rate_vs_projection(combined_logs, stat_code, projection_value)
                             
                             # Calculate edge
-                            proj = manual_entry.get('projection', 0)
-                            edge_str, _, _ = calc_edge(proj, manual_line) if proj else ("—", "—", "—")
+                            projection_for_edge = manual_entry.get('projection')
+                            edge_str, _, _ = calc_edge(projection_for_edge, manual_line) if projection_for_edge is not None else ("—", "—", "—")
                             
                             add_to_bet_sheet(
                                 player_data=manual_entry['player_data'],
                                 stat_display=manual_entry['stat_display'],
-                                projection=proj,
+                                projection=projection_for_edge,
                                 line=manual_line,
                                 edge=edge_str,
                                 line_source='manual',
@@ -2505,13 +2603,7 @@ def render_bet_sheet_sidebar(cur_season, prev_season):
             col_bulk1, col_bulk2 = st.columns(2)
             with col_bulk1:
                 if st.button("🗑️ Clear All", key="clear_all_bets", use_container_width=True):
-                    if st.session_state.get('confirm_clear', False):
-                        clear_bet_sheet()
-                        st.session_state.confirm_clear = False
-                    else:
-                        st.session_state.confirm_clear = True
-                        st.warning("Click again to confirm clearing all bets")
-                        st.rerun()
+                    clear_bet_sheet()
             
             with col_bulk2:
                 csv_data = export_bet_sheet_csv()
@@ -2524,9 +2616,6 @@ def render_bet_sheet_sidebar(cur_season, prev_season):
                         key="export_bet_sheet",
                         use_container_width=True
                     )
-            
-            if st.session_state.get('confirm_clear', False):
-                st.session_state.confirm_clear = False
             
             st.markdown("---")
             
@@ -2542,17 +2631,20 @@ def render_bet_sheet_sidebar(cur_season, prev_season):
                 sorted_bets.sort(key=lambda x: x['stat_display'])
             
             # Render each bet item (skip the one being edited)
-            for bet in sorted_bets:
+            for idx, bet in enumerate(sorted_bets):
                 if bet.get('id') != editing_id:
-                    render_bet_item(bet, cur_season, prev_season)
+                    render_bet_item(bet, cur_season, prev_season, index=idx)
 
 
-def render_bet_item(bet, cur_season, prev_season):
+def render_bet_item(bet, cur_season, prev_season, index=None):
     """Render a single bet item row in the bet sheet."""
     bet_id = bet.get('id', '')
     player_name = bet['player_name']
     team = bet['team_abbrev']
     stat_display = bet['stat_display']
+    
+    # Use index to ensure unique keys even if bet_id is duplicated
+    unique_key_suffix = f"_{index}" if index is not None else f"_{bet_id}"
     
     # Get current line value fresh from bet sheet (in case it was updated)
     current_bet = next((b for b in st.session_state.bet_sheet if b.get('id') == bet_id), bet)
@@ -2577,7 +2669,7 @@ def render_bet_item(bet, cur_season, prev_season):
         with col_header1:
             st.markdown(f"**{player_name}** ({team})")
         with col_header2:
-            if st.button("🗑️", key=f"remove_{bet_id}", help="Remove"):
+            if st.button("🗑️", key=f"remove_{bet_id}{unique_key_suffix}", help="Remove"):
                 remove_from_bet_sheet(bet_id)
         
         # Stat display
@@ -2586,7 +2678,7 @@ def render_bet_item(bet, cur_season, prev_season):
         # Line input/adjustment controls
         if line is None:
             # Show number input for entering line when line is None
-            manual_line_key = f"manual_line_{bet_id}"
+            manual_line_key = f"manual_line_{bet_id}{unique_key_suffix}"
             new_line = st.number_input(
                 "Enter Line",
                 min_value=0.0,
@@ -2596,8 +2688,9 @@ def render_bet_item(bet, cur_season, prev_season):
                 label_visibility="visible"
             )
             # Add apply button for manual entry
-            if st.button("✅ Apply Line", key=f"apply_manual_{bet_id}", use_container_width=True):
+            if st.button("✅ Apply Line", key=f"apply_manual_{bet_id}{unique_key_suffix}", use_container_width=True):
                 if new_line > 0:
+                    new_line = max(0.0, new_line)  # Ensure non-negative
                     update_bet_sheet_item(bet_id, {'line': new_line, 'line_source': 'manual'}, cur_season, prev_season)
         else:
             # Show +/- adjustment buttons when line exists - match matchup board pattern
@@ -2608,10 +2701,10 @@ def render_bet_item(bet, cur_season, prev_season):
             current_line = next((b.get('line') for b in st.session_state.bet_sheet if b.get('id') == bet_id), line)
             
             with col_line1:
-                btn_key_dec = f"betsheet_dec_{bet_id}"
+                btn_key_dec = f"betsheet_dec_{bet_id}{unique_key_suffix}"
                 if st.button("➖", key=btn_key_dec, help=f"Decrease by {step_size}", use_container_width=True):
                     if current_line is not None:
-                        new_line = round(current_line - step_size, 1)
+                        new_line = max(0.0, round(current_line - step_size, 1))  # Prevent negative values
                         update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
             
             with col_line2:
@@ -2623,15 +2716,16 @@ def render_bet_item(bet, cur_season, prev_season):
                     min_value=0.0,
                     value=float(current_line) if current_line is not None else 0.0,
                     step=step_size,
-                    key=f"edit_line_{bet_id}",
+                    key=f"edit_line_{bet_id}{unique_key_suffix}",
                     label_visibility="collapsed"
                 )
-                # Update if line changed
+                # Update if line changed (ensure non-negative)
                 if current_line is not None and abs(edited_line - current_line) > 0.01:
+                    edited_line = max(0.0, edited_line)  # Prevent negative values
                     update_bet_sheet_item(bet_id, {'line': edited_line}, cur_season, prev_season)
             
             with col_line3:
-                btn_key_inc = f"betsheet_inc_{bet_id}"
+                btn_key_inc = f"betsheet_inc_{bet_id}{unique_key_suffix}"
                 if st.button("➕", key=btn_key_inc, help=f"Increase by {step_size}", use_container_width=True):
                     if current_line is not None:
                         new_line = round(current_line + step_size, 1)
@@ -2652,7 +2746,7 @@ def render_bet_item(bet, cur_season, prev_season):
             window_options,
             index=current_idx,
             horizontal=True,
-            key=f"window_{bet_id}",
+            key=f"window_{bet_id}{unique_key_suffix}",
             label_visibility="collapsed"
         )
         if new_window != hit_rate_window:
@@ -2664,14 +2758,14 @@ def render_bet_item(bet, cur_season, prev_season):
             min_value=0.0,
             value=float(stake) if stake else 0.0,
             step=1.0,
-            key=f"stake_{bet_id}",
+            key=f"stake_{bet_id}{unique_key_suffix}",
             label_visibility="visible"
         )
         if abs(new_stake - (stake if stake else 0.0)) > 0.01:  # Use tolerance for float comparison
             update_bet_sheet_item(bet_id, {'stake': new_stake if new_stake > 0 else None}, cur_season, prev_season)
         
         # Edit button
-        if st.button("✏️ Edit", key=f"edit_{bet_id}", use_container_width=True):
+        if st.button("✏️ Edit", key=f"edit_{bet_id}{unique_key_suffix}", use_container_width=True):
             st.session_state.bet_sheet_editing = bet_id
             st.rerun()
         
@@ -2700,7 +2794,7 @@ def render_bet_item_edit_modal(bet, cur_season, prev_season):
         btn_key_dec = f"modal_dec_{bet_id}"
         if st.button("➖", key=btn_key_dec, help=f"Decrease by {step_size}", use_container_width=True):
             if current_line is not None:
-                new_line = round(current_line - step_size, 1)
+                new_line = max(0.0, round(current_line - step_size, 1))  # Prevent negative values
                 update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
     
     with col_line2:
@@ -2716,6 +2810,7 @@ def render_bet_item_edit_modal(bet, cur_season, prev_season):
             label_visibility="collapsed"
         )
         if current_line is not None and abs(new_line_input - current_line) > 0.01:
+            new_line_input = max(0.0, new_line_input)  # Prevent negative values
             update_bet_sheet_item(bet_id, {'line': new_line_input}, cur_season, prev_season)
     
     with col_line3:
@@ -2829,8 +2924,8 @@ def render_bet_sheet():
             st.markdown("---")
     
     # Display all bets
-    for bet in st.session_state.bet_sheet:
-        render_bet_item(bet, current_season, prior_season)
+    for idx, bet in enumerate(st.session_state.bet_sheet):
+        render_bet_item(bet, current_season, prior_season, index=idx)
 
 if __name__ == "__main__":
     main()
