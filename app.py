@@ -1846,6 +1846,10 @@ No game is selected yet — choose one in the sidebar to start.
     home_team = selected_game["home"]
     away_team = selected_game["away"]
     game_date = selected_game.get("date", None)
+    
+    # Debug: Show team abbreviations being used
+    print(f"[DEBUG] Selected game: {away_team} @ {home_team} on {game_date}")
+    print(f"[DEBUG] Team abbreviations - Home: '{home_team}', Away: '{away_team}'")
 
     # Title / description
     st.title("🏀 NBA Player Props Projection Model")
