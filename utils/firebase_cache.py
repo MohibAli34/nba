@@ -184,16 +184,17 @@ def get_cached_data(cache_key: str, max_age_hours: int = 24, timeout_seconds: fl
                 if age > max_age:
                     print(f"[CACHE] [CLOCK] Cache EXPIRED for {cache_key} (age: {age}, max: {max_age})")
                     return None
+                
+                # Cache is still fresh - return it
+                cached_data = data.get('data')
+                data_size = len(str(cached_data)) if cached_data else 0
+                print(f"[CACHE] [OK] Cache HIT for {cache_key} (age: {age}, size: {data_size} chars, fetched in {fetch_time:.3f}s)")
+                return cached_data
             except (TypeError, ValueError) as e:
                 print(f"[CACHE] [WARN] Error comparing cache age for {cache_key}: {e}")
                 print(f"[CACHE] [WARN] cached_time type: {type(cached_time)}, max_age_hours type: {type(max_age_hours)}")
                 # If we can't compare, assume cache is invalid
                 return None
-            
-            cached_data = data.get('data')
-            data_size = len(str(cached_data)) if cached_data else 0
-            print(f"[CACHE] [OK] Cache HIT for {cache_key} (age: {age}, size: {data_size} chars, fetched in {fetch_time:.3f}s)")
-            return cached_data
         
         print(f"[CACHE] [WARN] No timestamp found in cache for {cache_key}")
         return None
