@@ -1246,31 +1246,45 @@ def get_players_by_team(team_abbrev, season="2024-25"):
     
     # Cache miss - fetch from API
     try:
+        print(f"[ROSTER] [API] Fetching roster for {team_abbrev} ({season}) from NBA API...")
         all_teams = teams.get_teams()
         team_info = [t for t in all_teams if t["abbreviation"] == team_abbrev]
 
         if not team_info:
+            print(f"[ROSTER] [ERROR] Team abbreviation '{team_abbrev}' not found in NBA teams list")
+            print(f"[ROSTER] [DEBUG] Available teams: {[t['abbreviation'] for t in all_teams[:10]]}...")
             return pd.DataFrame()
 
         team_id = team_info[0]["id"]
+        team_name = team_info[0]["full_name"]
+        print(f"[ROSTER] [INFO] Found team: {team_name} (ID: {team_id})")
 
         rate_limit()
         from nba_api.stats.endpoints import commonteamroster
 
         # Use safe wrapper if available
         if NBA_API_WRAPPER_AVAILABLE:
+            print(f"[ROSTER] [API] Using safe wrapper to fetch roster...")
             roster_obj = nba_api_wrapper.safe_nba_api_call(
                 commonteamroster.CommonTeamRoster,
                 team_id=team_id,
                 season=season,
             )
             if roster_obj is None:
-                print(f"Error fetching team roster for {team_abbrev}: API call failed")
+                error_msg = f"API call returned None for {team_abbrev} ({season})"
+                print(f"[ROSTER] [ERROR] {error_msg}")
                 return pd.DataFrame()
-            df = roster_obj.get_data_frames()[0]
+            try:
+                df = roster_obj.get_data_frames()[0]
+                print(f"[ROSTER] [API] Got {len(df)} rows from API")
+            except Exception as e:
+                print(f"[ROSTER] [ERROR] Failed to get data frames: {e}")
+                return pd.DataFrame()
         else:
+            print(f"[ROSTER] [API] Using direct API call (no wrapper)...")
             roster = commonteamroster.CommonTeamRoster(team_id=team_id, season=season)
             df = roster.get_data_frames()[0]
+            print(f"[ROSTER] [API] Got {len(df)} rows from API")
 
         if not df.empty:
             players_list = []
@@ -1283,6 +1297,7 @@ def get_players_by_team(team_abbrev, season="2024-25"):
                     }
                 )
             result_df = pd.DataFrame(players_list)
+            print(f"[ROSTER] [SUCCESS] Processed {len(result_df)} players for {team_abbrev}")
             
             # Cache the result
             if FIREBASE_CACHE_AVAILABLE:
@@ -1294,10 +1309,14 @@ def get_players_by_team(team_abbrev, season="2024-25"):
                     print(f"[ROSTER] [WARN] Failed to cache roster data: {e}")
             
             return result_df
-
-        return pd.DataFrame()
+        else:
+            print(f"[ROSTER] [WARN] API returned empty DataFrame for {team_abbrev} ({season})")
+            return pd.DataFrame()
     except Exception as e:
-        print(f"Error fetching team roster: {e}")
+        error_msg = f"Exception fetching team roster for {team_abbrev}: {str(e)}"
+        print(f"[ROSTER] [ERROR] {error_msg}")
+        import traceback
+        traceback.print_exc()
         return pd.DataFrame()
 
 

@@ -1999,17 +1999,27 @@ No game is selected yet — choose one in the sidebar to start.
             '_cache_status': 'EMPTY',
         }
     
-    # Show cache status to user
+    # Show cache status to user with detailed error info
     cache_status = game_data.get('_cache_status', 'UNKNOWN')
     cache_key = game_data.get('_cache_key', '')
     fetch_time = game_data.get('_fetch_time', 0)
+    roster_errors = game_data.get('_roster_errors', [])
     
     if cache_status == 'HIT':
         cache_status_placeholder.success(f"✅ **Data loaded from cache** (instant) | Key: `{cache_key}`")
     elif cache_status == 'MISS':
         cache_status_placeholder.warning(f"🔄 **Data fetched from API** ({fetch_time:.1f}s) | Saved to cache: `{cache_key}`")
+    elif cache_status == 'ERROR' or cache_status == 'TIMEOUT':
+        cache_status_placeholder.error(f"❌ **Data load failed** | Status: {cache_status}")
+        if roster_errors:
+            with cache_status_placeholder.expander("🔍 View Error Details", expanded=True):
+                for error in roster_errors:
+                    st.error(f"• {error}")
+                st.info("💡 **Troubleshooting:** Check Streamlit Cloud logs for detailed API errors. The NBA API might be temporarily unavailable.")
     else:
         cache_status_placeholder.info(f"ℹ️ **Data loaded** | Status: {cache_status}")
+        if roster_errors:
+            cache_status_placeholder.warning(f"⚠️ Some roster data failed to load. Check logs for details.")
     
     # Remove cache metadata before processing
     game_data.pop('_cache_status', None)

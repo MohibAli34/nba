@@ -86,27 +86,55 @@ def fetch_game_data_internal(
         'team_stats': [],
     }
     
-    # Fetch rosters with error handling
-    print(f"[INFO] Fetching rosters...")
+    # Fetch rosters with error handling and detailed logging
+    print(f"[INFO] Fetching rosters for {home_team} and {away_team}...")
+    roster_errors = []
+    
     try:
+        print(f"[INFO] Attempting to fetch {home_team} roster for {cur_season}...")
         home_roster = get_players_by_team(home_team, season=cur_season)
         if home_roster.empty:
+            print(f"[INFO] {home_team} roster empty for {cur_season}, trying {prev_season}...")
             home_roster = get_players_by_team(home_team, season=prev_season)
         if not home_roster.empty:
             home_roster["team_abbrev"] = home_team
             game_data['home_roster'] = home_roster.to_dict('records')
+            print(f"[SUCCESS] Loaded {len(home_roster)} players for {home_team}")
+        else:
+            error_msg = f"Failed to fetch {home_team} roster for both {cur_season} and {prev_season}"
+            print(f"[ERROR] {error_msg}")
+            roster_errors.append(error_msg)
     except Exception as e:
-        print(f"[WARN] Failed to fetch home roster: {e}")
+        error_msg = f"Exception fetching {home_team} roster: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        import traceback
+        traceback.print_exc()
+        roster_errors.append(error_msg)
     
     try:
+        print(f"[INFO] Attempting to fetch {away_team} roster for {cur_season}...")
         away_roster = get_players_by_team(away_team, season=cur_season)
         if away_roster.empty:
+            print(f"[INFO] {away_team} roster empty for {cur_season}, trying {prev_season}...")
             away_roster = get_players_by_team(away_team, season=prev_season)
         if not away_roster.empty:
             away_roster["team_abbrev"] = away_team
             game_data['away_roster'] = away_roster.to_dict('records')
+            print(f"[SUCCESS] Loaded {len(away_roster)} players for {away_team}")
+        else:
+            error_msg = f"Failed to fetch {away_team} roster for both {cur_season} and {prev_season}"
+            print(f"[ERROR] {error_msg}")
+            roster_errors.append(error_msg)
     except Exception as e:
-        print(f"[WARN] Failed to fetch away roster: {e}")
+        error_msg = f"Exception fetching {away_team} roster: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        import traceback
+        traceback.print_exc()
+        roster_errors.append(error_msg)
+    
+    # Store errors for debugging
+    if roster_errors:
+        game_data['_roster_errors'] = roster_errors
     
     # Fetch starters with error handling
     print(f"[INFO] Fetching starters...")
