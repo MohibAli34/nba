@@ -101,12 +101,19 @@ def get_cached_data(cache_key: str, max_age_hours: int = 24, timeout_seconds: fl
     
     Args:
         cache_key: Unique key for the cached data
-        max_age_hours: Maximum age in hours (default 24)
+        max_age_hours: Maximum age in hours (default 24) - will be converted to int if needed
         timeout_seconds: Maximum time to wait for Firebase call (default 5.0)
     
     Returns:
         The cached data if found and fresh, None otherwise
     """
+    # Ensure max_age_hours is an integer (convert from string if needed)
+    try:
+        max_age_hours = int(max_age_hours)
+    except (ValueError, TypeError):
+        print(f"[CACHE] [WARN] Invalid max_age_hours: {max_age_hours}, using default 24")
+        max_age_hours = 24
+    
     db = get_firestore_db()
     if db is None:
         print(f"[CACHE] [ERROR] Firebase DB not available for {cache_key}")
@@ -167,11 +174,20 @@ def get_cached_data(cache_key: str, max_age_hours: int = 24, timeout_seconds: fl
                     print(f"[CACHE] [WARN] Could not parse timestamp for {cache_key}")
                     return None
             
-            age = datetime.now() - cached_time
-            max_age = timedelta(hours=max_age_hours)
-            
-            if age > max_age:
-                print(f"[CACHE] [CLOCK] Cache EXPIRED for {cache_key} (age: {age}, max: {max_age})")
+            # Calculate age as timedelta
+            try:
+                age = datetime.now() - cached_time
+                # Ensure max_age_hours is numeric before creating timedelta
+                max_age_hours_float = float(max_age_hours)
+                max_age = timedelta(hours=max_age_hours_float)
+                
+                if age > max_age:
+                    print(f"[CACHE] [CLOCK] Cache EXPIRED for {cache_key} (age: {age}, max: {max_age})")
+                    return None
+            except (TypeError, ValueError) as e:
+                print(f"[CACHE] [WARN] Error comparing cache age for {cache_key}: {e}")
+                print(f"[CACHE] [WARN] cached_time type: {type(cached_time)}, max_age_hours type: {type(max_age_hours)}")
+                # If we can't compare, assume cache is invalid
                 return None
             
             cached_data = data.get('data')
