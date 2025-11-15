@@ -51,8 +51,8 @@ def configure_nba_api():
         if hasattr(nba_http, 'NBAHTTP'):
             original_request = nba_http.NBAHTTP.request
             
-            def patched_request(self, url, headers=None, timeout=30, **kwargs):
-                """Patched request method with proper headers and timeout."""
+            def patched_request(self, url, headers=None, timeout=60, **kwargs):  # Increased default timeout
+                """Patched request method with proper headers and extended timeout."""
                 # Merge our headers with any provided headers
                 merged_headers = NBA_HEADERS.copy()
                 if headers:
@@ -61,14 +61,15 @@ def configure_nba_api():
                 # Use our session
                 session = get_nba_session()
                 
-                # Make request with retries
+                # Make request with retries and extended timeout
                 response = safe_request_with_retries(
                     lambda: session.get(url, headers=merged_headers, timeout=timeout, **kwargs),
                     url=url,
-                    max_retries=3
+                    max_retries=5,  # Increased retries
+                    timeout=timeout
                 )
                 if response is None:
-                    raise requests.exceptions.Timeout("Request timed out after retries")
+                    raise requests.exceptions.Timeout(f"Request timed out after retries (timeout={timeout}s)")
                 return response
             
             nba_http.NBAHTTP.request = patched_request
@@ -162,9 +163,14 @@ def safe_nba_api_call(
     
     for attempt in range(1, max_retries + 1):
         try:
-            # Instantiate the API call class
+            # Instantiate the API call class with extended timeout
             # Note: Some nba_api classes make the request in __init__, others in get_data_frames()
-            result = api_call_class(*args, **kwargs)
+            # Try to pass timeout if the class supports it
+            try:
+                result = api_call_class(*args, timeout=timeout, **kwargs)
+            except TypeError:
+                # Class doesn't accept timeout parameter, use default
+                result = api_call_class(*args, **kwargs)
             
             # Try to get data frames (this triggers the actual API call if not already done)
             # Some endpoints might fail here, so we catch exceptions
@@ -173,34 +179,34 @@ def safe_nba_api_call(
             except Exception as inner_e:
                 # If getting data frames fails, it might be a timeout
                 error_str = str(inner_e).lower()
-                if "timeout" in error_str or "read timed out" in error_str:
+                if "timeout" in error_str or "read timed out" in error_str or "timed out" in error_str:
                     raise requests.exceptions.Timeout(str(inner_e))
                 # Re-raise if it's not a timeout
                 raise
             
             if attempt > 1:
-                print(f"[NBA_API] [RETRY] Success on attempt {attempt}")
+                print(f"[NBA_API] [SUCCESS] Got response on attempt {attempt}")
             return result
         except requests.exceptions.Timeout as e:
             last_exception = e
             if attempt < max_retries:
-                delay = 1.5 * (2 ** (attempt - 1))
+                delay = 2.0 * (2 ** (attempt - 1))  # Start with 2s, increase exponentially
                 print(
-                    f"[NBA_API] [RETRY] Timeout on attempt {attempt}/{max_retries}. "
+                    f"[NBA_API] [RETRY] Timeout on attempt {attempt}/{max_retries} (timeout={timeout}s). "
                     f"Retrying in {delay:.1f}s..."
                 )
                 time.sleep(delay)
             else:
-                print(f"[NBA_API] [ERROR] All {max_retries} attempts failed (timeout): {e}")
+                print(f"[NBA_API] [ERROR] All {max_retries} attempts failed (timeout={timeout}s): {e}")
         except Exception as e:
             # Check if it's a timeout-related error
             error_str = str(e).lower()
-            if any(keyword in error_str for keyword in ["timeout", "read timed out", "connection", "pool", "timed out"]):
+            if any(keyword in error_str for keyword in ["timeout", "read timed out", "connection", "pool", "timed out", "ssl", "certificate"]):
                 last_exception = e
                 if attempt < max_retries:
-                    delay = 1.5 * (2 ** (attempt - 1))
+                    delay = 2.0 * (2 ** (attempt - 1))
                     print(
-                        f"[NBA_API] [RETRY] Timeout/connection error on attempt {attempt}/{max_retries}: {e}. "
+                        f"[NBA_API] [RETRY] Network/timeout error on attempt {attempt}/{max_retries}: {e}. "
                         f"Retrying in {delay:.1f}s..."
                     )
                     time.sleep(delay)
