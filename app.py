@@ -1917,9 +1917,10 @@ No game is selected yet — choose one in the sidebar to start.
             
             # Update progress message
             if message_idx < len(progress_messages):
-                threshold, next_idx = progress_messages[message_idx]
-                if elapsed >= threshold:
-                    progress_container.info(threshold)
+                msg_text, threshold = progress_messages[message_idx]
+                # Ensure threshold is numeric
+                if isinstance(threshold, (int, float)) and elapsed >= float(threshold):
+                    progress_container.info(msg_text)
                     message_idx += 1
             
             time.sleep(1)
