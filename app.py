@@ -1954,7 +1954,20 @@ No game is selected yet — choose one in the sidebar to start.
             }
         elif result_container['error']:
             error_obj = result_container['error']
-            progress_container.error(f"❌ Error: {error_obj}")
+            
+            # Format error message properly
+            if isinstance(error_obj, Exception):
+                error_type = type(error_obj).__name__
+                error_msg = str(error_obj) if str(error_obj) else repr(error_obj)
+                full_error = f"{error_type}: {error_msg}"
+                print(f"[ERROR] Exception in load_data: {full_error}")
+                import traceback
+                traceback.print_exc()
+            else:
+                full_error = str(error_obj) if error_obj else "Unknown error"
+                print(f"[ERROR] Error in load_data: {full_error}")
+            
+            progress_container.error(f"❌ Error: {full_error}")
             
             # Try to extract roster errors from error object if it's a dict-like structure
             roster_errors = []
@@ -1963,8 +1976,14 @@ No game is selected yet — choose one in the sidebar to start.
             elif hasattr(error_obj, '_roster_errors'):
                 roster_errors = error_obj._roster_errors
             elif isinstance(error_obj, Exception):
-                # If it's an exception, include the error message
-                roster_errors = [f"Error during data fetch: {str(error_obj)}"]
+                # If it's an exception, include the full error message
+                error_type = type(error_obj).__name__
+                error_msg = str(error_obj) if str(error_obj) else repr(error_obj)
+                roster_errors = [f"{error_type}: {error_msg}"]
+            
+            # If no roster errors, use the full error message
+            if not roster_errors:
+                roster_errors = [full_error if full_error else 'Unknown error occurred during data fetch']
             
             game_data = {
                 'home_team': home_team,
@@ -1980,7 +1999,7 @@ No game is selected yet — choose one in the sidebar to start.
                 'def_vs_pos_df': [],
                 'team_stats': [],
                 '_cache_status': 'ERROR',
-                '_roster_errors': roster_errors if roster_errors else ['Unknown error occurred during data fetch'],
+                '_roster_errors': roster_errors,
             }
         else:
             game_data = result_container['data']
