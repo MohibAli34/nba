@@ -1,7 +1,16 @@
 import requests
 import json
+import os
+from dotenv import load_dotenv
 
-api_key = "f6aac04a6ab847bab31a7db076ef89e8"
+# Load environment variables from .env file
+load_dotenv()
+
+# Get API key from environment
+api_key = os.environ.get("ODDS_API_KEY", None)
+
+if not api_key:
+    raise ValueError("ODDS_API_KEY not found in environment variables. Please set it in .env file.")
 
 # Step 1: Get all NBA events
 print("=" * 80)

@@ -5,6 +5,14 @@ from datetime import datetime, timedelta
 import time
 import requests
 from bs4 import BeautifulSoup
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Get API keys from environment variables
+ODDS_API_KEY = os.environ.get("ODDS_API_KEY", None)
 
 # Import NBA API wrapper early to configure headers and retries
 try:
@@ -267,11 +275,13 @@ def get_head_to_head_history(
 # -------------------------------------------------
 # Odds / FanDuel (you said we keep this OFF for now, but leaving interface)
 # -------------------------------------------------
-def _fetch_fanduel_lines_internal(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
+def _fetch_fanduel_lines_internal(event_id, api_key=None):
     """
     Internal function to fetch player props from The Odds API.
     Returns dict[player_name][stat_code] = {'line': float, 'over_price': ..., 'under_price': ...}
     """
+    if api_key is None:
+        api_key = ODDS_API_KEY
     if not event_id or not api_key:
         return {}
 
@@ -357,12 +367,14 @@ def _fetch_fanduel_lines_internal(event_id, api_key="f6aac04a6ab847bab31a7db076e
 
 
 @st.cache_data(ttl=1800)
-def fetch_fanduel_lines(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
+def fetch_fanduel_lines(event_id, api_key=None):
     """
     Fetch player props for a specific NBA event from The Odds API.
     Uses Firebase cache if available, otherwise fetches from API.
     Returns dict[player_name][stat_code] = {'line': float, 'over_price': ..., 'under_price': ...}
     """
+    if api_key is None:
+        api_key = ODDS_API_KEY
     if not event_id or not api_key:
         return {}
     
@@ -384,11 +396,13 @@ def fetch_fanduel_lines(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
 
 
 def _get_event_id_for_game_internal(
-    home_team, away_team, api_key="f6aac04a6ab847bab31a7db076ef89e8"
+    home_team, away_team, api_key=None
 ):
     """
     Internal function to look up The Odds API event ID for a given NBA matchup (away @ home).
     """
+    if api_key is None:
+        api_key = ODDS_API_KEY
     try:
         url = "https://api.the-odds-api.com/v4/sports/basketball_nba/events"
         params = {"apiKey": api_key}
@@ -459,12 +473,14 @@ def _get_event_id_for_game_internal(
 
 @st.cache_data(ttl=3600)
 def get_event_id_for_game(
-    home_team, away_team, api_key="f6aac04a6ab847bab31a7db076ef89e8"
+    home_team, away_team, api_key=None
 ):
     """
     Look up The Odds API event ID for a given NBA matchup (away @ home).
     Uses Firebase cache if available, otherwise fetches from API.
     """
+    if api_key is None:
+        api_key = ODDS_API_KEY
     # Try Firebase cache first
     if FIREBASE_CACHE_AVAILABLE:
         cache_key = f"event_id_{home_team}_{away_team}"

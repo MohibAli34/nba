@@ -103,15 +103,35 @@ streamlit run app.py
 
 ## 🔑 Environment Variables
 
-| Variable        | Description                    | Example                                 |
-|-----------------|----------------------------------|------------------------------------------|
-| `ODDS_API_KEY`  | API key for The Odds API        | `f6aac04a6ab847bab31a7db076ef89e8`      |
-| `CACHE_DIR`     | Directory for caching data      | `./cache`                               |
+All API keys and configuration should be stored in a `.env` file in the project root. See `.env.example` or create `.env` with the following variables:
+
+| Variable                      | Description                                   | Example                                     |
+|-------------------------------|-----------------------------------------------|---------------------------------------------|
+| `ODDS_API_KEY`                | API key for The Odds API                      | `f6aac04a6ab847bab31a7db076ef89e8`          |
+| `FIREBASE_API_KEY`            | Firebase API key (for React client)           | `AIzaSyAT2jJAMMXErx-IAErqw5uvHaEbiVTh_js`   |
+| `FIREBASE_AUTH_DOMAIN`        | Firebase authentication domain                | `nba-props-app-57fec.firebaseapp.com`       |
+| `FIREBASE_PROJECT_ID`         | Firebase project ID                           | `nba-props-app-57fec`                       |
+| `FIREBASE_STORAGE_BUCKET`     | Firebase storage bucket                       | `nba-props-app-57fec.firebasestorage.app`   |
+| `FIREBASE_MESSAGING_SENDER_ID`| Firebase messaging sender ID                  | `139494696545`                              |
+| `FIREBASE_APP_ID`             | Firebase app ID                               | `1:139494696545:web:004413270772fac564ac20` |
+| `FIREBASE_MEASUREMENT_ID`     | Firebase analytics measurement ID             | `G-XE7KWJBH0Z`                              |
+| `FIREBASE_CREDENTIALS_FILE`   | Path to Firebase admin SDK credentials JSON   | `nba-props-app-57fec-firebase-adminsdk-*.json` |
+| `CACHE_DIR`                   | Directory for caching data (optional)         | `./cache`                                   |
+
+**Note:** The `.env` file is gitignored for security. Copy your API keys from your Firebase console and The Odds API dashboard into the `.env` file.
 
 ## 🧪 Usage Guide
 
-1. **Launch the app.**  
-2. *(Optional)* Enter your Odds API key in the sidebar.  
+1. **Set up environment variables:**
+   - Create a `.env` file in the project root (see `.gitignore` for example format)
+   - Add all required API keys (see Environment Variables section above)
+   - For React app: Run `python generate_config.py` to generate `src/config.js` from `.env`
+   
+2. **Launch the app:**  
+   ```bash
+   streamlit run app.py
+   ```
+   
 3. Select an upcoming game from the dropdown.  
 4. Choose a team and player.  
 5. Pick a stat category (PTS, REB, AST, 3PM, PRA, DD).  

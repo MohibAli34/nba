@@ -11,6 +11,10 @@ import random
 import json
 from datetime import datetime
 from copy import deepcopy
+from dotenv import load_dotenv
+
+# Load environment variables from .env file at startup
+load_dotenv()
 
 # make sure we can import from utils/
 sys.path.append(os.path.join(os.path.dirname(__file__), "utils"))

@@ -11,16 +11,8 @@ import {
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "firebase/auth";
 
-// --- Firebase Config ---
-const firebaseConfig = {
-  apiKey: "AIzaSyAT2jJAMMXErx-IAErqw5uvHaEbiVTh_js",
-  authDomain: "nba-props-app-57fec.firebaseapp.com",
-  projectId: "nba-props-app-57fec",
-  storageBucket: "nba-props-app-57fec.firebasestorage.app",
-  messagingSenderId: "139494696545",
-  appId: "1:139494696545:web:004413270772fac564ac20",
-  measurementId: "G-XE7KWJBH0Z",
-};
+// --- Firebase Config (loaded from config.js which can be generated from .env) ---
+import firebaseConfig from "./config";
 
 // --- Initialize Firebase ---
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();

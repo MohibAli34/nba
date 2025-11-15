@@ -7,6 +7,16 @@ import json
 import time
 from datetime import datetime, timedelta
 from typing import Any, Optional, Dict
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Get Firebase credentials file path from environment
+FIREBASE_CREDENTIALS_FILE = os.environ.get(
+    "FIREBASE_CREDENTIALS_FILE",
+    "nba-props-app-57fec-firebase-adminsdk-fbsvc-047c134065.json"
+)
 
 try:
     import firebase_admin
@@ -32,10 +42,10 @@ def initialize_firebase():
         return True
     
     try:
-        # Path to service account key file
+        # Path to service account key file - use environment variable or default
         cred_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
-            'nba-props-app-57fec-firebase-adminsdk-fbsvc-047c134065.json'
+            FIREBASE_CREDENTIALS_FILE
         )
         
         if not os.path.exists(cred_path):
