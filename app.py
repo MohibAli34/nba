@@ -2084,10 +2084,10 @@ No game is selected yet — choose one in the sidebar to start.
                     st.error(f"• {error}")
             
             if timeout_flag:
-                st.error("• Request timed out after 2 minutes")
+                st.error(f"• Request timed out after {timeout_seconds // 60} minutes")
             
             if cache_status == 'TIMEOUT':
-                st.error("• API calls took too long (> 2 minutes)")
+                st.error(f"• API calls took too long (> {timeout_seconds // 60} minutes)")
             
             st.markdown("**Possible Causes:**")
             st.markdown("""
