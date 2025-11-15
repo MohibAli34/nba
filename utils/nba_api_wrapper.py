@@ -53,17 +53,13 @@ def configure_nba_api():
     """
     try:
         # Try to patch the HTTP layer
-        try:
-            import nba_api.library.http as nba_http
-        except ImportError:
-            # nba_api not installed or different structure
-            raise ImportError("nba_api library not available")
+        import nba_api.library.http as nba_http
         
         # Store original request method
         if hasattr(nba_http, 'NBAHTTP'):
             original_request = nba_http.NBAHTTP.request
             
-            def patched_request(self, url, headers=None, timeout=60, **kwargs):  # Increased default timeout
+            def patched_request(self, url, headers=None, timeout=180, **kwargs):  # 3 minutes default timeout
                 """Patched request method with proper headers and extended timeout."""
                 # Merge our headers with any provided headers
                 merged_headers = NBA_HEADERS.copy()
@@ -98,7 +94,7 @@ def safe_request_with_retries(
     url: str = "",
     max_retries: int = 5,  # Increased from 3 to 5
     base_delay: float = 2.0,  # Start with 2s instead of 1.5s
-    timeout: float = 60.0  # Increased from 30 to 60 seconds
+    timeout: float = 180.0  # 3 minutes timeout for slow API
 ) -> Optional[requests.Response]:
     """
     Execute a request function with retries and exponential backoff.
@@ -156,7 +152,7 @@ def safe_nba_api_call(
     api_call_class,
     *args,
     max_retries: int = 5,  # Increased from 3 to 5
-    timeout: float = 60.0,  # Increased from 30 to 60 seconds
+    timeout: float = 180.0,  # 3 minutes timeout for slow API
     **kwargs
 ) -> Optional[Any]:
     """

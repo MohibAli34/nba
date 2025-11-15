@@ -226,9 +226,35 @@ def get_cached_game_data(
         home_roster = cached_data.get('home_roster', [])
         away_roster = cached_data.get('away_roster', [])
         
-        # Check if both rosters are empty
-        home_roster_empty = not home_roster or (isinstance(home_roster, pd.DataFrame) and home_roster.empty) or (isinstance(home_roster, list) and len(home_roster) == 0)
-        away_roster_empty = not away_roster or (isinstance(away_roster, pd.DataFrame) and away_roster.empty) or (isinstance(away_roster, list) and len(away_roster) == 0)
+        # Check if both rosters are empty (avoid DataFrame truth value ambiguity)
+        home_roster_empty = False
+        away_roster_empty = False
+        
+        if home_roster is None:
+            home_roster_empty = True
+        elif isinstance(home_roster, pd.DataFrame):
+            home_roster_empty = home_roster.empty
+        elif isinstance(home_roster, list):
+            home_roster_empty = len(home_roster) == 0
+        else:
+            # Other types - treat as empty if falsy
+            try:
+                home_roster_empty = not bool(home_roster)
+            except (ValueError, TypeError):
+                home_roster_empty = True
+        
+        if away_roster is None:
+            away_roster_empty = True
+        elif isinstance(away_roster, pd.DataFrame):
+            away_roster_empty = away_roster.empty
+        elif isinstance(away_roster, list):
+            away_roster_empty = len(away_roster) == 0
+        else:
+            # Other types - treat as empty if falsy
+            try:
+                away_roster_empty = not bool(away_roster)
+            except (ValueError, TypeError):
+                away_roster_empty = True
         
         if home_roster_empty and away_roster_empty:
             print(f"[GAME_CACHE] [WARN] Cached data has empty rosters - attempting to refresh them...")
@@ -238,7 +264,7 @@ def get_cached_game_data(
             import threading
             import time
             
-            roster_refresh_timeout = 30  # 30 seconds max to refresh rosters
+            roster_refresh_timeout = 180  # 3 minutes max to refresh rosters
             roster_container = {'home': None, 'away': None, 'done': False}
             
             def fetch_rosters_with_timeout():
@@ -288,16 +314,18 @@ def get_cached_game_data(
             refreshed_home = roster_container.get('home')
             refreshed_away = roster_container.get('away')
             
-            # Update cached_data with refreshed rosters if we got them
-            if refreshed_home:
+            # Update cached_data with refreshed rosters if we got them (avoid DataFrame truth ambiguity)
+            if refreshed_home is not None and (isinstance(refreshed_home, list) and len(refreshed_home) > 0):
                 cached_data['home_roster'] = refreshed_home
-                print(f"[GAME_CACHE] [SUCCESS] Using refreshed {home_team} roster")
-            if refreshed_away:
+                print(f"[GAME_CACHE] [SUCCESS] Using refreshed {home_team} roster ({len(refreshed_home)} players)")
+            if refreshed_away is not None and (isinstance(refreshed_away, list) and len(refreshed_away) > 0):
                 cached_data['away_roster'] = refreshed_away
-                print(f"[GAME_CACHE] [SUCCESS] Using refreshed {away_team} roster")
+                print(f"[GAME_CACHE] [SUCCESS] Using refreshed {away_team} roster ({len(refreshed_away)} players)")
             
             # Update cache if we got any rosters (for next time)
-            if refreshed_home or refreshed_away:
+            has_refreshed_home = refreshed_home is not None and (isinstance(refreshed_home, list) and len(refreshed_home) > 0)
+            has_refreshed_away = refreshed_away is not None and (isinstance(refreshed_away, list) and len(refreshed_away) > 0)
+            if has_refreshed_home or has_refreshed_away:
                 try:
                     serializable_data = _prepare_for_storage(cached_data)
                     firebase_cache.set_cached_data(cache_key, serializable_data)
@@ -325,11 +353,19 @@ def get_cached_game_data(
                 print(f"[GAME_CACHE] [WARN] ⚠️ After refresh: still no rosters available")
                 print(f"[GAME_CACHE] [WARN] This usually means the NBA API is still unavailable or timing out")
         
-        # Final check - ensure rosters are DataFrames before returning
-        if isinstance(cached_data.get('home_roster'), list):
-            cached_data['home_roster'] = pd.DataFrame(cached_data['home_roster']) if cached_data['home_roster'] else pd.DataFrame()
-        if isinstance(cached_data.get('away_roster'), list):
-            cached_data['away_roster'] = pd.DataFrame(cached_data['away_roster']) if cached_data['away_roster'] else pd.DataFrame()
+        # Final check - ensure rosters are DataFrames before returning (avoid DataFrame truth ambiguity)
+        home_roster_final = cached_data.get('home_roster')
+        away_roster_final = cached_data.get('away_roster')
+        
+        if isinstance(home_roster_final, list):
+            cached_data['home_roster'] = pd.DataFrame(home_roster_final) if len(home_roster_final) > 0 else pd.DataFrame()
+        elif not isinstance(home_roster_final, pd.DataFrame):
+            cached_data['home_roster'] = pd.DataFrame()
+        
+        if isinstance(away_roster_final, list):
+            cached_data['away_roster'] = pd.DataFrame(away_roster_final) if len(away_roster_final) > 0 else pd.DataFrame()
+        elif not isinstance(away_roster_final, pd.DataFrame):
+            cached_data['away_roster'] = pd.DataFrame()
         
         # Add cache status indicator
         cached_data['_cache_status'] = 'HIT'
@@ -351,8 +387,8 @@ def get_cached_game_data(
     import threading
     start_time = time.time()
     
-    # Add timeout mechanism (2 minutes max)
-    MAX_FETCH_TIMEOUT = 120  # 2 minutes
+    # Add timeout mechanism (3 minutes max)
+    MAX_FETCH_TIMEOUT = 180  # 3 minutes
     result_container = {'data': None, 'exception': None, 'completed': False}
     
     def fetch_with_progress():
