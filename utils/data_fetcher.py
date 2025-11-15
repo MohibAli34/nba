@@ -6,6 +6,14 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
+# Import NBA API wrapper early to configure headers and retries
+try:
+    from . import nba_api_wrapper
+    NBA_API_WRAPPER_AVAILABLE = True
+except ImportError:
+    NBA_API_WRAPPER_AVAILABLE = False
+    print("[WARN] NBA API wrapper not available")
+
 from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import (
     playergamelog,
@@ -17,6 +25,14 @@ from nba_api.live.nba.endpoints import scoreboard
 
 # 🔁 local sqlite cache helper (your database.py module)
 from . import database
+
+# 🔥 Firebase cache helper
+try:
+    from . import firebase_cache
+    FIREBASE_CACHE_AVAILABLE = True
+except ImportError:
+    FIREBASE_CACHE_AVAILABLE = False
+    print("[WARN] Firebase cache module not available")
 
 
 # -------------------------------------------------
@@ -55,12 +71,26 @@ def get_player_game_logs_cached(player_id, season="2024-25"):
     """
     try:
         rate_limit()
-        gamelog = playergamelog.PlayerGameLog(
-            player_id=player_id,
-            season=season,
-            season_type_all_star="Regular Season",
-        )
-        df = gamelog.get_data_frames()[0]
+        
+        # Use safe wrapper if available
+        if NBA_API_WRAPPER_AVAILABLE:
+            gamelog_obj = nba_api_wrapper.safe_nba_api_call(
+                playergamelog.PlayerGameLog,
+                player_id=player_id,
+                season=season,
+                season_type_all_star="Regular Season",
+            )
+            if gamelog_obj is None:
+                print(f"Error fetching game logs for player {player_id} in {season}: API call failed")
+                return pd.DataFrame()
+            df = gamelog_obj.get_data_frames()[0]
+        else:
+            gamelog = playergamelog.PlayerGameLog(
+                player_id=player_id,
+                season=season,
+                season_type_all_star="Regular Season",
+            )
+            df = gamelog.get_data_frames()[0]
         return df
     except Exception as e:
         print(f"Error fetching game logs for player {player_id} in {season}: {e}")
@@ -75,12 +105,26 @@ def get_team_stats_cached(season="2024-25"):
     """
     try:
         rate_limit()
-        team_stats = leaguedashteamstats.LeagueDashTeamStats(
-            season=season,
-            season_type_all_star="Regular Season",
-            per_mode_detailed="PerGame",
-        )
-        df = team_stats.get_data_frames()[0]
+        
+        # Use safe wrapper if available
+        if NBA_API_WRAPPER_AVAILABLE:
+            team_stats_obj = nba_api_wrapper.safe_nba_api_call(
+                leaguedashteamstats.LeagueDashTeamStats,
+                season=season,
+                season_type_all_star="Regular Season",
+                per_mode_detailed="PerGame",
+            )
+            if team_stats_obj is None:
+                print(f"Error fetching team stats for {season}: API call failed")
+                return pd.DataFrame()
+            df = team_stats_obj.get_data_frames()[0]
+        else:
+            team_stats = leaguedashteamstats.LeagueDashTeamStats(
+                season=season,
+                season_type_all_star="Regular Season",
+                per_mode_detailed="PerGame",
+            )
+            df = team_stats.get_data_frames()[0]
         return df
     except Exception as e:
         print(f"Error fetching team stats for {season}: {e}")
@@ -103,16 +147,30 @@ def get_opponent_recent_games(opponent_abbrev, season="2024-25", last_n=10):
         team_id = team_info[0]["id"]
 
         rate_limit()
-        # Use leaguegamefinder to get recent games for the team
-        gamefinder = leaguegamefinder.LeagueGameFinder(
-            team_id_nullable=team_id,
-            season_nullable=season,
-            season_type_nullable='Regular Season',
-            timeout=10
-        )
         
-        # Get the games and sort by date (most recent first)
-        games = gamefinder.get_data_frames()[0]
+        # Use safe wrapper if available
+        if NBA_API_WRAPPER_AVAILABLE:
+            gamefinder_obj = nba_api_wrapper.safe_nba_api_call(
+                leaguegamefinder.LeagueGameFinder,
+                team_id_nullable=team_id,
+                season_nullable=season,
+                season_type_nullable='Regular Season',
+                timeout=30
+            )
+            if gamefinder_obj is None:
+                print(f"Error fetching opponent recent games for {opponent_abbrev}: API call failed")
+                return pd.DataFrame()
+            games = gamefinder_obj.get_data_frames()[0]
+        else:
+            # Use leaguegamefinder to get recent games for the team
+            gamefinder = leaguegamefinder.LeagueGameFinder(
+                team_id_nullable=team_id,
+                season_nullable=season,
+                season_type_nullable='Regular Season',
+                timeout=30
+            )
+            games = gamefinder.get_data_frames()[0]
+        
         if not games.empty:
             # Convert GAME_DATE to datetime and sort
             games['GAME_DATE'] = pd.to_datetime(games['GAME_DATE'])
@@ -125,24 +183,60 @@ def get_opponent_recent_games(opponent_abbrev, season="2024-25", last_n=10):
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600)
 def get_head_to_head_history(
     player_id, opponent_abbrev, seasons=["2024-25", "2023-24"]
 ):
     """
     Get player's historical game logs vs one opponent across multiple seasons.
+    Uses Firebase cache to avoid repeated API calls.
     """
+    # Check Firebase cache first
+    if FIREBASE_CACHE_AVAILABLE:
+        cache_key = f"h2h_{player_id}_{opponent_abbrev}_{'_'.join(seasons)}"
+        cached_data = firebase_cache.get_cached_data(cache_key, max_age_hours=48)
+        if cached_data is not None:
+            # Convert cached dict back to DataFrame
+            if isinstance(cached_data, list) and len(cached_data) > 0:
+                try:
+                    df = pd.DataFrame(cached_data)
+                    print(f"[H2H] [CACHE] Loaded h2h data from cache for player {player_id} vs {opponent_abbrev}")
+                    return df
+                except Exception as e:
+                    print(f"[H2H] [WARN] Failed to parse cached h2h data: {e}")
+            elif isinstance(cached_data, dict) and 'data' in cached_data:
+                try:
+                    df = pd.DataFrame(cached_data['data'])
+                    print(f"[H2H] [CACHE] Loaded h2h data from cache for player {player_id} vs {opponent_abbrev}")
+                    return df
+                except Exception as e:
+                    print(f"[H2H] [WARN] Failed to parse cached h2h data: {e}")
+    
+    # Cache miss - fetch from API
     h2h_games = []
 
     for season in seasons:
         try:
             rate_limit()
-            gamelog = playergamelog.PlayerGameLog(
-                player_id=player_id,
-                season=season,
-                season_type_all_star="Regular Season",
-            )
-            df = gamelog.get_data_frames()[0]
+            
+            # Use safe wrapper if available
+            if NBA_API_WRAPPER_AVAILABLE:
+                gamelog_obj = nba_api_wrapper.safe_nba_api_call(
+                    playergamelog.PlayerGameLog,
+                    player_id=player_id,
+                    season=season,
+                    season_type_all_star="Regular Season",
+                )
+                if gamelog_obj is None:
+                    print(f"Error fetching h2h for {season}: API call failed")
+                    continue
+                df = gamelog_obj.get_data_frames()[0]
+            else:
+                gamelog = playergamelog.PlayerGameLog(
+                    player_id=player_id,
+                    season=season,
+                    season_type_all_star="Regular Season",
+                )
+                df = gamelog.get_data_frames()[0]
 
             if not df.empty and "MATCHUP" in df.columns:
                 opponent_games = df[df["MATCHUP"].str.contains(opponent_abbrev, na=False)]
@@ -153,7 +247,19 @@ def get_head_to_head_history(
             continue
 
     if h2h_games:
-        return pd.concat(h2h_games, ignore_index=True)
+        result_df = pd.concat(h2h_games, ignore_index=True)
+        
+        # Cache the result
+        if FIREBASE_CACHE_AVAILABLE:
+            try:
+                # Convert DataFrame to dict for caching
+                cache_data = result_df.to_dict('records')
+                firebase_cache.set_cached_data(cache_key, cache_data)
+                print(f"[H2H] [CACHE] Saved h2h data to cache for player {player_id} vs {opponent_abbrev}")
+            except Exception as e:
+                print(f"[H2H] [WARN] Failed to cache h2h data: {e}")
+        
+        return result_df
 
     return pd.DataFrame()
 
@@ -161,10 +267,9 @@ def get_head_to_head_history(
 # -------------------------------------------------
 # Odds / FanDuel (you said we keep this OFF for now, but leaving interface)
 # -------------------------------------------------
-@st.cache_data(ttl=1800)
-def fetch_fanduel_lines(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
+def _fetch_fanduel_lines_internal(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
     """
-    Fetch player props for a specific NBA event from The Odds API.
+    Internal function to fetch player props from The Odds API.
     Returns dict[player_name][stat_code] = {'line': float, 'over_price': ..., 'under_price': ...}
     """
     if not event_id or not api_key:
@@ -251,12 +356,38 @@ def fetch_fanduel_lines(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
         return {}
 
 
-@st.cache_data(ttl=3600)
-def get_event_id_for_game(
+@st.cache_data(ttl=1800)
+def fetch_fanduel_lines(event_id, api_key="f6aac04a6ab847bab31a7db076ef89e8"):
+    """
+    Fetch player props for a specific NBA event from The Odds API.
+    Uses Firebase cache if available, otherwise fetches from API.
+    Returns dict[player_name][stat_code] = {'line': float, 'over_price': ..., 'under_price': ...}
+    """
+    if not event_id or not api_key:
+        return {}
+    
+    # Try Firebase cache first
+    if FIREBASE_CACHE_AVAILABLE:
+        cache_key = f"fanduel_lines_{event_id}"
+        cached_data = firebase_cache.get_or_fetch(
+            cache_key,
+            _fetch_fanduel_lines_internal,
+            max_age_hours=24,
+            event_id=event_id,
+            api_key=api_key
+        )
+        if cached_data is not None:
+            return cached_data
+    
+    # Fallback to direct API call
+    return _fetch_fanduel_lines_internal(event_id, api_key)
+
+
+def _get_event_id_for_game_internal(
     home_team, away_team, api_key="f6aac04a6ab847bab31a7db076ef89e8"
 ):
     """
-    Look up The Odds API event ID for a given NBA matchup (away @ home).
+    Internal function to look up The Odds API event ID for a given NBA matchup (away @ home).
     """
     try:
         url = "https://api.the-odds-api.com/v4/sports/basketball_nba/events"
@@ -324,6 +455,32 @@ def get_event_id_for_game(
     except Exception as e:
         print(f"[ERROR] Error getting event ID: {e}")
         return None
+
+
+@st.cache_data(ttl=3600)
+def get_event_id_for_game(
+    home_team, away_team, api_key="f6aac04a6ab847bab31a7db076ef89e8"
+):
+    """
+    Look up The Odds API event ID for a given NBA matchup (away @ home).
+    Uses Firebase cache if available, otherwise fetches from API.
+    """
+    # Try Firebase cache first
+    if FIREBASE_CACHE_AVAILABLE:
+        cache_key = f"event_id_{home_team}_{away_team}"
+        cached_data = firebase_cache.get_or_fetch(
+            cache_key,
+            _get_event_id_for_game_internal,
+            max_age_hours=24,
+            home_team=home_team,
+            away_team=away_team,
+            api_key=api_key
+        )
+        if cached_data is not None:
+            return cached_data
+    
+    # Fallback to direct API call
+    return _get_event_id_for_game_internal(home_team, away_team, api_key)
 
 
 def get_player_fanduel_line(player_name, stat, odds_data):
@@ -501,12 +658,26 @@ def get_player_current_team(player_id, season="2025-26"):
     """
     try:
         rate_limit()
-        gamelog = playergamelog.PlayerGameLog(
-            player_id=player_id,
-            season=season,
-            season_type_all_star="Regular Season",
-        )
-        df = gamelog.get_data_frames()[0]
+        
+        # Use safe wrapper if available
+        if NBA_API_WRAPPER_AVAILABLE:
+            gamelog_obj = nba_api_wrapper.safe_nba_api_call(
+                playergamelog.PlayerGameLog,
+                player_id=player_id,
+                season=season,
+                season_type_all_star="Regular Season",
+            )
+            if gamelog_obj is None:
+                print(f"Error fetching player team for {player_id}: API call failed")
+                return None
+            df = gamelog_obj.get_data_frames()[0]
+        else:
+            gamelog = playergamelog.PlayerGameLog(
+                player_id=player_id,
+                season=season,
+                season_type_all_star="Regular Season",
+            )
+            df = gamelog.get_data_frames()[0]
 
         if not df.empty and "MATCHUP" in df.columns:
             matchup = df.iloc[0]["MATCHUP"]
@@ -595,12 +766,25 @@ def get_player_position(player_id, season="2024-25"):
             from nba_api.stats.endpoints import commonteamroster
 
             rate_limit()
-            gamelog_resp = playergamelog.PlayerGameLog(
-                player_id=player_id,
-                season=season,
-                season_type_all_star="Regular Season",
-            )
-            df_log = gamelog_resp.get_data_frames()[0]
+            
+            # Use safe wrapper if available
+            if NBA_API_WRAPPER_AVAILABLE:
+                gamelog_resp_obj = nba_api_wrapper.safe_nba_api_call(
+                    playergamelog.PlayerGameLog,
+                    player_id=player_id,
+                    season=season,
+                    season_type_all_star="Regular Season",
+                )
+                if gamelog_resp_obj is None:
+                    raise Exception("Failed to fetch game log for position lookup")
+                df_log = gamelog_resp_obj.get_data_frames()[0]
+            else:
+                gamelog_resp = playergamelog.PlayerGameLog(
+                    player_id=player_id,
+                    season=season,
+                    season_type_all_star="Regular Season",
+                )
+                df_log = gamelog_resp.get_data_frames()[0]
 
             if not df_log.empty and "MATCHUP" in df_log.columns:
                 matchup = df_log.iloc[0]["MATCHUP"]
@@ -621,10 +805,22 @@ def get_player_position(player_id, season="2024-25"):
 
                     # get season roster
                     rate_limit()
-                    roster = commonteamroster.CommonTeamRoster(
-                        team_id=team_id, season=season
-                    )
-                    roster_df = roster.get_data_frames()[0]
+                    
+                    # Use safe wrapper if available
+                    if NBA_API_WRAPPER_AVAILABLE:
+                        roster_obj = nba_api_wrapper.safe_nba_api_call(
+                            commonteamroster.CommonTeamRoster,
+                            team_id=team_id,
+                            season=season,
+                        )
+                        if roster_obj is None:
+                            raise Exception("Failed to fetch roster for position lookup")
+                        roster_df = roster_obj.get_data_frames()[0]
+                    else:
+                        roster = commonteamroster.CommonTeamRoster(
+                            team_id=team_id, season=season
+                        )
+                        roster_df = roster.get_data_frames()[0]
 
                     if not roster_df.empty:
                         row_match = roster_df[roster_df["PLAYER_ID"] == player_id]
@@ -648,8 +844,19 @@ def get_player_position(player_id, season="2024-25"):
                 from nba_api.stats.endpoints import commonplayerinfo
 
                 rate_limit()
-                info = commonplayerinfo.CommonPlayerInfo(player_id=player_id)
-                info_df = info.get_data_frames()[0]
+                
+                # Use safe wrapper if available
+                if NBA_API_WRAPPER_AVAILABLE:
+                    info_obj = nba_api_wrapper.safe_nba_api_call(
+                        commonplayerinfo.CommonPlayerInfo,
+                        player_id=player_id,
+                    )
+                    if info_obj is None:
+                        raise Exception("Failed to fetch player info for position lookup")
+                    info_df = info_obj.get_data_frames()[0]
+                else:
+                    info = commonplayerinfo.CommonPlayerInfo(player_id=player_id)
+                    info_df = info.get_data_frames()[0]
 
                 if not info_df.empty and "POSITION" in info_df.columns:
                     raw_pos = info_df.iloc[0]["POSITION"]
@@ -992,7 +1199,30 @@ def get_players_by_team(team_abbrev, season="2024-25"):
     """
     Get all players who have played for a specific team in a season.
     Returns DataFrame with: player_id, full_name, position
+    Uses Firebase cache to avoid repeated API calls.
     """
+    # Check Firebase cache first
+    if FIREBASE_CACHE_AVAILABLE:
+        cache_key = f"roster_{team_abbrev}_{season}"
+        cached_data = firebase_cache.get_cached_data(cache_key, max_age_hours=48)
+        if cached_data is not None:
+            # Convert cached dict back to DataFrame
+            if isinstance(cached_data, list) and len(cached_data) > 0:
+                try:
+                    df = pd.DataFrame(cached_data)
+                    print(f"[ROSTER] [CACHE] Loaded roster from cache for {team_abbrev} ({season})")
+                    return df
+                except Exception as e:
+                    print(f"[ROSTER] [WARN] Failed to parse cached roster data: {e}")
+            elif isinstance(cached_data, dict) and 'data' in cached_data:
+                try:
+                    df = pd.DataFrame(cached_data['data'])
+                    print(f"[ROSTER] [CACHE] Loaded roster from cache for {team_abbrev} ({season})")
+                    return df
+                except Exception as e:
+                    print(f"[ROSTER] [WARN] Failed to parse cached roster data: {e}")
+    
+    # Cache miss - fetch from API
     try:
         all_teams = teams.get_teams()
         team_info = [t for t in all_teams if t["abbreviation"] == team_abbrev]
@@ -1005,8 +1235,20 @@ def get_players_by_team(team_abbrev, season="2024-25"):
         rate_limit()
         from nba_api.stats.endpoints import commonteamroster
 
-        roster = commonteamroster.CommonTeamRoster(team_id=team_id, season=season)
-        df = roster.get_data_frames()[0]
+        # Use safe wrapper if available
+        if NBA_API_WRAPPER_AVAILABLE:
+            roster_obj = nba_api_wrapper.safe_nba_api_call(
+                commonteamroster.CommonTeamRoster,
+                team_id=team_id,
+                season=season,
+            )
+            if roster_obj is None:
+                print(f"Error fetching team roster for {team_abbrev}: API call failed")
+                return pd.DataFrame()
+            df = roster_obj.get_data_frames()[0]
+        else:
+            roster = commonteamroster.CommonTeamRoster(team_id=team_id, season=season)
+            df = roster.get_data_frames()[0]
 
         if not df.empty:
             players_list = []
@@ -1018,7 +1260,18 @@ def get_players_by_team(team_abbrev, season="2024-25"):
                         "position": row.get("POSITION", "F"),
                     }
                 )
-            return pd.DataFrame(players_list)
+            result_df = pd.DataFrame(players_list)
+            
+            # Cache the result
+            if FIREBASE_CACHE_AVAILABLE:
+                try:
+                    cache_data = result_df.to_dict('records')
+                    firebase_cache.set_cached_data(cache_key, cache_data)
+                    print(f"[ROSTER] [CACHE] Saved roster to cache for {team_abbrev} ({season})")
+                except Exception as e:
+                    print(f"[ROSTER] [WARN] Failed to cache roster data: {e}")
+            
+            return result_df
 
         return pd.DataFrame()
     except Exception as e:

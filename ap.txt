@@ -1,4 +1,4 @@
-# hadi bodla can youu see this? 
+# mohib bhosarchoot
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -35,8 +35,6 @@ from utils.cached_data_fetcher import (
     get_team_stats_cached_db,
     scrape_defense_vs_position_cached_db,
 )
-
-from utils.game_data_cache import get_cached_game_data
 
 from utils.database import get_cache_stats, clear_old_seasons
 
@@ -213,6 +211,55 @@ def calc_hit_rate_vs_projection(
         denominator=denominator,
     )
 
+# --- ADD THIS NEW FUNCTION (around line 215) ---
+
+def calc_directional_hit_rate(
+    game_logs: pd.DataFrame,
+    stat_code: str,
+    threshold_value: float,
+    direction: str,  # "Over" or "Under"
+    window: int | None = None,
+    denominator: int | None = None,
+):
+    """
+    Calculates the hit rate for a specific direction (Over/Under)
+    against a fixed threshold.
+    """
+    if game_logs is None or game_logs.empty:
+        return None
+    if threshold_value is None:
+        return None
+    if direction not in {"Over", "Under"}:
+        return None  # Invalid direction
+
+    stat_series = _get_stat_series_for_hit_rate(game_logs, stat_code)
+    if stat_series is None:
+        return None
+
+    if window is not None:
+        stat_series = stat_series.head(window)
+
+    if stat_series.empty:
+        return None
+
+    if direction == "Over":
+        hits = (stat_series > threshold_value).sum()
+    else:  # direction == "Under"
+        hits = (stat_series < threshold_value).sum()
+
+    if denominator is None:
+        denominator = window if window is not None else len(stat_series)
+
+    if denominator is None or denominator <= 0:
+        denominator = len(stat_series)
+
+    if denominator <= 0:
+        return None
+
+    return (hits / denominator) * 100.0
+
+
+# --- END OF NEW FUNCTION ---
 
 def calc_edge(prediction: float, line_value: float):
     """
@@ -335,7 +382,6 @@ SESSION_DEFAULTS = {
     "manual_lines": {},
     "hit_rates": {},
     "stable_ids": {},
-    "hit_rate_window_view": "L10",  # Global hit rate window view for all players
 }
 
 
@@ -648,12 +694,11 @@ def save_bet_sheet_to_file():
 
 
 def initialize_bet_sheet():
-    """Initialize bet sheet in session state if it doesn't exist. Always starts with empty bet sheet."""
+    """Initialize bet sheet in session state if it doesn't exist, loading from file if available."""
     if 'bet_sheet' not in st.session_state:
-        # ALWAYS START WITH EMPTY BET SHEET
-        st.session_state.bet_sheet = []
-        # Still load settings from file if available, or use defaults
-        _, settings = load_bet_sheet_from_file()
+        # Load from file on first initialization
+        bet_sheet, settings = load_bet_sheet_from_file()
+        st.session_state.bet_sheet = bet_sheet
         st.session_state.bet_sheet_settings = settings
     if 'bet_sheet_settings' not in st.session_state:
         st.session_state.bet_sheet_settings = {
@@ -663,8 +708,6 @@ def initialize_bet_sheet():
         }
     if 'bet_sheet_toast' not in st.session_state:
         st.session_state.bet_sheet_toast = None
-    if 'bet_sheet_show_clear_confirm' not in st.session_state:
-        st.session_state.bet_sheet_show_clear_confirm = False
 
 
 def get_bet_sheet_item_id(player_id, stat_code, line):
@@ -1519,67 +1562,74 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
     
     with col1:
         btn_key_dec = f"detail_dec_{base_key}_{unique_suffix}"
-        # Disable ➖ button when line is 0.0 or less
-        is_disabled = (current_line is None or current_line <= 0.0)
         if st.button("➖", 
                       key=btn_key_dec, 
                       help=f"Decrease line by {step_size}", 
-                      use_container_width=True,
-                      disabled=is_disabled):
+                      use_container_width=True):
             if current_line is not None:
                 new_value = max(0.0, round(current_line - step_size, 1))  # Prevent negative values
-            else:
-                new_value = 0.0
-            set_adjusted_line_value(player_identifier, stat_code, new_value)
-            st.rerun()
+                set_adjusted_line_value(player_identifier, stat_code, new_value)
+                st.rerun()
     
     with col2:
         if stat_code == "DD":
             st.markdown("**Line:** N/A (DD market)")
         else:
-            # Always display current line (show 0.0 instead of "—")
-            line_display = float(current_line) if current_line is not None else 0.0
-            st.write(f"**{line_display:.1f}**")
-            
-            # Show original FanDuel line if different and available
-            if fd_line_val is not None and current_line is not None and current_line != fd_line_val:
-                st.caption(f"Original: {fd_line_val:.1f}")
-            
-            # Optional: number input for direct editing
-            new_line = st.number_input(
-                "Edit Line",
-                min_value=0.0,
-                max_value=100.0,
-                step=step_size,
-                value=line_display,
-                format="%.1f",
-                key=f"line_input_{base_key}_{unique_suffix}",
-                label_visibility="collapsed"
-            )
-            
-            # Update if changed (ensure non-negative)
-            if abs(new_line - line_display) > 0.01:
-                new_line = max(0.0, new_line)  # Prevent negative values
-                set_adjusted_line_value(player_identifier, stat_code, new_line)
-                st.rerun()
+            if current_line is None:
+                st.markdown("**Line:** —")
+                st.caption("No line available. Enter manually below.")
+            else:
+                # Display current line
+                st.write(f"**{current_line:.1f}**")
+                # Use number input for direct editing
+                new_line = st.number_input(
+                    "Current Line",
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=step_size,
+                    value=float(current_line) if current_line is not None else 0.0,
+                    format="%.1f",
+                    key=f"line_input_{base_key}_{unique_suffix}",
+                    label_visibility="collapsed"
+                )
+                
+                # Update if changed (ensure non-negative)
+                if current_line is not None and abs(new_line - current_line) > 0.01:
+                    new_line = max(0.0, new_line)  # Prevent negative values
+                    set_adjusted_line_value(player_identifier, stat_code, new_line)
+                    st.rerun()
     
     with col3:
         btn_key_inc = f"detail_inc_{base_key}_{unique_suffix}"
         if st.button("➕", key=btn_key_inc, help=f"Increase line by {step_size}", use_container_width=True):
             if current_line is not None:
                 new_value = round(current_line + step_size, 1)
-            else:
-                new_value = step_size
-            set_adjusted_line_value(player_identifier, stat_code, new_value)
-            st.rerun()
+                set_adjusted_line_value(player_identifier, stat_code, new_value)
+                st.rerun()
 
 
-    # Note: Manual line input is no longer needed since we always show controls with 0.0 default
-    # The number input in col2 above handles manual editing
+    # Manual line input option (if no line available)
+    if current_line is None and stat_code != "DD":
+        manual_default = get_manual_line_value(player_identifier, stat_code, 0.0)
+        with st.form(key=f"manual_form_{base_key}"):
+            manual_line = st.number_input(
+                "Enter line manually",
+                min_value=0.0,
+                value=manual_default,
+                step=step_size,
+                key=manual_key,
+                help="Enter a custom line to calculate hit rate",
+            )
+            
+            if st.form_submit_button("Apply Manual Line"):
+                if manual_line > 0:
+                    manual_line = max(0.0, manual_line)  # Ensure non-negative
+                    set_manual_line_value(player_identifier, stat_code, manual_line)
+                    set_adjusted_line_value(player_identifier, stat_code, manual_line)
+                    st.rerun()
     
     # Recalculate hit rate and edge based on current (adjusted) line
-    # Since we now default to 0.0, check if line is greater than 0
-    if current_line is not None and current_line > 0.0 and stat_code != "DD":
+    if current_line is not None and stat_code != "DD":
         # Use combined logs for hit rate calculation
         combined_logs_for_hit = current_logs if not current_logs.empty else prior_logs
         
@@ -1803,6 +1853,15 @@ def render_player_detail_body(pdata, cur_season, prev_season, render_index=None)
 # ─────────────────────────────
 # Build matchup table + live expanders
 # ─────────────────────────────
+# ─────────────────────────────
+# Build matchup table + live expanders
+# ─────────────────────────────
+# ─────────────────────────────
+# Build matchup table + live expanders
+# ─────────────────────────────
+# ─────────────────────────────
+# Build matchup table + live expanders
+# ─────────────────────────────
 def build_matchup_view(
     selected_game: dict,
     stat_code: str,
@@ -1840,7 +1899,6 @@ No game is selected yet — choose one in the sidebar to start.
 
     home_team = selected_game["home"]
     away_team = selected_game["away"]
-    game_date = selected_game.get("date", None)
 
     # Title / description
     st.title("🏀 NBA Player Props Projection Model")
@@ -1855,61 +1913,22 @@ No game is selected yet — choose one in the sidebar to start.
         "defensive matchup for everyone in this game."
     )
 
-    # Fetch all game data from cache or API (checks Firebase first)
-    cache_status_placeholder = st.empty()
-    with cache_status_placeholder.container():
-        st.info("🔄 Checking cache for game data...")
-    
-    game_data = get_cached_game_data(
-        home_team=home_team,
-        away_team=away_team,
-        cur_season=cur_season,
-        prev_season=prev_season,
-        game_date=game_date,
-        max_age_hours=24
-    )
-    
-    if not game_data:
-        cache_status_placeholder.error("❌ Failed to load game data. Please try again.")
-        return
-    
-    # Show cache status to user
-    cache_status = game_data.get('_cache_status', 'UNKNOWN')
-    cache_key = game_data.get('_cache_key', '')
-    fetch_time = game_data.get('_fetch_time', 0)
-    
-    if cache_status == 'HIT':
-        cache_status_placeholder.success(f"✅ **Data loaded from cache** (instant) | Key: `{cache_key}`")
-    elif cache_status == 'MISS':
-        cache_status_placeholder.warning(f"🔄 **Data fetched from API** ({fetch_time:.1f}s) | Saved to cache: `{cache_key}`")
-    else:
-        cache_status_placeholder.info(f"ℹ️ **Data loaded** | Status: {cache_status}")
-    
-    # Remove cache metadata before processing
-    game_data.pop('_cache_status', None)
-    game_data.pop('_cache_key', None)
-    game_data.pop('_fetch_time', None)
-    
-    # Extract cached data (handle both DataFrame and dict formats)
-    home_roster = game_data.get('home_roster')
-    if not isinstance(home_roster, pd.DataFrame):
-        home_roster = pd.DataFrame(home_roster if home_roster else [])
-    
-    away_roster = game_data.get('away_roster')
-    if not isinstance(away_roster, pd.DataFrame):
-        away_roster = pd.DataFrame(away_roster if away_roster else [])
-    
-    starters_dict = game_data.get('starters_dict', {})
-    event_id = game_data.get('event_id')
-    odds_data = game_data.get('odds_data', {})
-    
-    def_vs_pos_df = game_data.get('def_vs_pos_df')
-    if not isinstance(def_vs_pos_df, pd.DataFrame):
-        def_vs_pos_df = pd.DataFrame(def_vs_pos_df if def_vs_pos_df else [])
-    
-    team_stats = game_data.get('team_stats')
-    if not isinstance(team_stats, pd.DataFrame):
-        team_stats = pd.DataFrame(team_stats if team_stats else [])
+    # shared data we reuse for all players
+    def_vs_pos_df = scrape_defense_vs_position_cached_db()
+    team_stats = get_team_stats_cached_db(season=prev_season)
+
+    # fetch rosters
+    home_roster = get_players_by_team(home_team, season=cur_season)
+    if home_roster.empty:
+        home_roster = get_players_by_team(home_team, season=prev_season)
+    if not home_roster.empty:
+        home_roster["team_abbrev"] = home_team
+
+    away_roster = get_players_by_team(away_team, season=cur_season)
+    if away_roster.empty:
+        away_roster = get_players_by_team(away_team, season=prev_season)
+    if not away_roster.empty:
+        away_roster["team_abbrev"] = away_team
 
     if home_roster.empty and away_roster.empty:
         st.error("Couldn't load rosters for this matchup.")
@@ -1918,7 +1937,8 @@ No game is selected yet — choose one in the sidebar to start.
     combined_roster = pd.concat([home_roster, away_roster], ignore_index=True)
     combined_roster = combined_roster.drop_duplicates(subset=["player_id"])
 
-    # Mark starters
+    # Scrape and mark starters
+    starters_dict = scrape_rotowire_starters()
     combined_roster["is_starter"] = combined_roster["full_name"].apply(
         lambda name: is_player_starter(name, starters_dict)
     )
@@ -1945,22 +1965,19 @@ No game is selected yet — choose one in the sidebar to start.
 
     total_players = len(combined_roster)
 
+    # Pre-fetch FanDuel lines for this matchup (one call per matchup)
+    event_id = get_event_id_for_game(home_team, away_team)
+    if event_id:
+        odds_data = fetch_fanduel_lines(event_id)
+    else:
+        odds_data = {}
+
     # Placeholders for data lists
     table_rows = []
     player_payloads = []
     
     # Status placeholder
     status_placeholder = st.empty()
-
-    # ---
-    # Helper function for handling manual line changes from number input
-    # ---
-    def _handle_manual_line_change(key, player_id, stat_code):
-        """Callback to update session state from a number_input."""
-        new_value = st.session_state.get(key, 0.0)
-        # Ensure non-negative
-        new_value = max(0.0, float(new_value))
-        set_adjusted_line_value(player_id, stat_code, new_value)
 
     # ---
     # STAGE 1: DATA COLLECTION LOOP
@@ -2071,26 +2088,42 @@ No game is selected yet — choose one in the sidebar to start.
         player_display_name = f"⭐️ {player_name}" if is_starter else player_name
         
         # Get or initialize adjusted line from session state (safely)
-        # If fd_line_val is None, use 0.0 as the default
-        default_line = fd_line_val if fd_line_val is not None else 0.0
-        current_line_table = get_adjusted_line_value(player_identifier, stat_code, default_line)
+        current_line_table = get_adjusted_line_value(player_identifier, stat_code, fd_line_val)
         
-        logs_for_hits = current_logs if not current_logs.empty else prior_logs
-
-        hit_rate_l5 = hit_rate_l10 = hit_rate_season = None
-        if stat_code != "DD" and pred_val is not None and logs_for_hits is not None and not logs_for_hits.empty:
-            hit_rate_l5 = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val, window=5, denominator=5)
-            hit_rate_l10 = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val, window=10, denominator=20)
-            hit_rate_season = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val)
-
+        # --- START: MODIFIED CODE (Point 2) ---
+        # Calculate edge and suggestion FIRST, as hit rate depends on it
         if current_line_table is not None and stat_code != "DD":
             adjusted_edge_str_table, _, adjusted_ou_short_table = calc_edge(pred_val, current_line_table)
         else:
             adjusted_edge_str_table = edge_str
             adjusted_ou_short_table = ou_short
         
+        # --- NEW HIT RATE LOGIC ---
+        logs_for_hits = current_logs if not current_logs.empty else prior_logs
+        hit_rate_l5 = hit_rate_l10 = hit_rate_season = None
+        
+        # Get the suggestion direction ("Over", "Under", "—")
+        suggestion_direction = adjusted_ou_short_table 
+        
+        if stat_code != "DD" and current_line_table is not None and suggestion_direction != "—" and logs_for_hits is not None and not logs_for_hits.empty:
+            # Use the new directional hit rate function based on the suggestion
+            hit_rate_l5 = calc_directional_hit_rate(
+                logs_for_hits, stat_code, current_line_table, suggestion_direction, window=5, denominator=5
+            )
+            hit_rate_l10 = calc_directional_hit_rate(
+                logs_for_hits, stat_code, current_line_table, suggestion_direction, window=10, denominator=10
+            )
+            hit_rate_season = calc_directional_hit_rate(
+                logs_for_hits, stat_code, current_line_table, suggestion_direction
+            )
+        else:
+            # Fallback to the original L10 "Over" hit rate if no clear suggestion
+            hit_rate_l10 = hit_pct_val 
+        # --- END OF NEW HIT RATE LOGIC ---
+        
         # Generate a stable unique ID for this player/stat combination
         stable_unique_id = get_or_create_stable_id(player_identifier, stat_code)
+        # --- END: MODIFIED CODE (Point 2) ---
 
         # Store data for interactive table row
         table_row_data = {
@@ -2169,29 +2202,7 @@ No game is selected yet — choose one in the sidebar to start.
     with header_cols[4]:
         st.markdown("**O/U**")
     with header_cols[5]:
-        # Compact inline layout: "Hit% L5 L10 Season" on one line
-        hit_cols = st.columns([1.2, 1, 1, 1.5])
-        with hit_cols[0]:
-            st.markdown("**Hit%**")
-        with hit_cols[1]:
-            # Button-based toggle for L5
-            current_view = st.session_state.get("hit_rate_window_view", "L10")
-            if st.button("L5", key="hit_toggle_l5", use_container_width=True, 
-                        type="primary" if current_view == "L5" else "secondary"):
-                st.session_state.hit_rate_window_view = "L5"
-                st.rerun()
-        with hit_cols[2]:
-            # Button-based toggle for L10
-            if st.button("L10", key="hit_toggle_l10", use_container_width=True,
-                        type="primary" if current_view == "L10" else "secondary"):
-                st.session_state.hit_rate_window_view = "L10"
-                st.rerun()
-        with hit_cols[3]:
-            # Button-based toggle for Season
-            if st.button("Season", key="hit_toggle_season", use_container_width=True,
-                        type="primary" if current_view == "Season" else "secondary"):
-                st.session_state.hit_rate_window_view = "Season"
-                st.rerun()
+        st.markdown("**Hit%**")
     with header_cols[6]:
         st.markdown("**Opp Def**")
     with header_cols[7]:
@@ -2222,93 +2233,89 @@ No game is selected yet — choose one in the sidebar to start.
                 stable_id_for_key = str(stable_id_row).replace("-", "_").replace(".", "_").replace(" ", "_")
                 stat_code_safe = str(row_data['stat_code']).replace("-", "_")
                 
-                # Tighter columns for a compact "stepper" with manual input
-                line_btn_cols = st.columns([1, 1.5, 1])
-                
-                with line_btn_cols[0]:
-                    # ➖ BUTTON
-                    btn_key = f"tbl_dec_{stable_id_for_key}_{stat_code_safe}_{idx}"
-                    is_disabled = (current_line is None or current_line <= 0.0)
-                    st.button(
-                        "➖",
-                        key=btn_key,
-                        help="Decrease by 0.5",
-                        disabled=is_disabled,
-                        use_container_width=True,
-                        on_click=set_adjusted_line_value,  # Use on_click handler
-                        args=(  # Pass arguments to the on_click function
-                            player_identifier,
-                            row_data['stat_code'],
-                            max(0.0, current_line - 0.5) if current_line is not None else 0.0
-                        )
-                    )
-                
-                with line_btn_cols[1]:
-                    # MANUAL SET (Number Input)
-                    num_input_key = f"num_in_{stable_id_for_key}_{stat_code_safe}_{idx}"
-                    line_value = float(current_line) if current_line is not None else 0.0
-                    st.number_input(
-                        "Line",
-                        min_value=0.0,
-                        value=line_value,
-                        step=0.5,
-                        key=num_input_key,
-                        on_change=_handle_manual_line_change,
-                        args=(num_input_key, player_identifier, row_data['stat_code']),
-                        label_visibility="collapsed",
-                        format="%.1f"
-                    )
-                    # Show original FanDuel line if different and available
-                    fd_line_val = row_data.get("fd_line_val")
-                    if fd_line_val is not None and current_line is not None and abs(current_line - fd_line_val) > 0.01:
-                        st.caption(f"FD: {fd_line_val:.1f}")
-                
-                with line_btn_cols[2]:
-                    # ➕ BUTTON
-                    btn_key_inc = f"tbl_inc_{stable_id_for_key}_{stat_code_safe}_{idx}"
-                    st.button(
-                        "➕",
-                        key=btn_key_inc,
-                        help="Increase by 0.5",
-                        use_container_width=True,
-                        on_click=set_adjusted_line_value,  # Use on_click handler
-                        args=(  # Pass arguments to the on_click function
-                            player_identifier,
-                            row_data['stat_code'],
-                            (current_line + 0.5) if current_line is not None else 0.5
-                        )
-                    )
+                if current_line is not None:
+                    line_btn_cols = st.columns([1, 2, 1])
+                    with line_btn_cols[0]:
+                        # **FIXED KEY** (removed render_count)
+                        btn_key = f"tbl_dec_{stable_id_for_key}_{stat_code_safe}_{idx}"
+                        if st.button("➖", key=btn_key, help="Decrease by 0.5"):
+                            new_line = max(0.0, current_line - 0.5)  # Prevent negative values
+                            set_adjusted_line_value(player_identifier, row_data['stat_code'], new_line)
+                            st.rerun() # Rerun is fine here, loop is finished
+                    
+                    with line_btn_cols[1]:
+                        st.write(f"**{current_line:.1f}**")
+                        if current_line != row_data["fd_line_val"] and row_data["fd_line_val"] is not None:
+                            st.caption(f"({row_data['fd_line_val']:.1f})")
+                    
+                    with line_btn_cols[2]:
+                        # **FIXED KEY** (removed render_count)
+                        btn_key_inc = f"tbl_inc_{stable_id_for_key}_{stat_code_safe}_{idx}"
+                        if st.button("➕", key=btn_key_inc, help="Increase by 0.5"):
+                            new_line = current_line + 0.5
+                            set_adjusted_line_value(player_identifier, row_data['stat_code'], new_line)
+                            st.rerun() # Rerun is fine here, loop is finished
+                else:
+                    st.write("—")
 
         with row_cols[4]:
             # Show O/U as difference between projection and line
             proj_val = row_data.get("proj_value", 0)
             current_line_ou = row_data.get("current_line")
             if current_line_ou is not None and proj_val is not None:
+                # --- START: MODIFIED CODE (Point 3) ---
                 diff = proj_val - current_line_ou
-                ou_display = f"{diff:+.1f}"
+                if diff > 0:
+                    ou_display = f"🟢 +{diff:.1f}"
+                else:
+                    ou_display = f"🔴 {diff:.1f}" # Shows 0.0 and negatives as red
             else:
+                # --- END: MODIFIED CODE (Point 3) ---
                 ou_display = row_data.get("ou_short", "—")
             st.write(ou_display)
 
         with row_cols[5]:
-            # Get the window selected in the header
-            window_to_show = st.session_state.get("hit_rate_window_view", "L10")
+            # Hit rate with tabs for L5, L10, Season
+            hit_rate_l5 = row_data.get("hit_rate_l5")
+            hit_rate_l10 = row_data.get("hit_rate_l10")
+            hit_rate_season = row_data.get("hit_rate_season")
             
-            # Get the correct hit rate value
-            hit_rate_val = None
-            if window_to_show == "L5":
-                hit_rate_val = row_data.get("hit_rate_l5")
-            elif window_to_show == "L10":
-                hit_rate_val = row_data.get("hit_rate_l10")
-            elif window_to_show == "Season":
-                hit_rate_val = row_data.get("hit_rate_season")
+            # --- START: MODIFIED CODE (Point 4) ---
+            # Get the model's suggestion for this row
+            suggestion = row_data.get("ou_short", "—")
             
-            # Display the single, relevant hit rate
-            if hit_rate_val is not None:
-                hit_color = "🟢" if hit_rate_val >= 50 else "🔴" if hit_rate_val < 30 else "🟡"
-                st.write(f"{hit_color} **{hit_rate_val:.0f}%**")
+            # Set tab labels based on the suggestion direction
+            if suggestion == "Over":
+                l5_label, l10_label, season_label = "L5 (Over)", "L10 (Over)", "Season (Over)"
+            elif suggestion == "Under":
+                l5_label, l10_label, season_label = "L5 (Under)", "L10 (Under)", "Season (Under)"
             else:
-                st.write("—")
+                # Fallback label if no clear suggestion
+                l5_label, l10_label, season_label = "L5", "L10", "Season"
+
+            window_tabs = st.tabs([l5_label, l10_label, season_label])
+            
+            with window_tabs[0]:
+                if hit_rate_l5 is not None:
+                    hit_color = "🟢" if hit_rate_l5 >= 50 else "🔴" if hit_rate_l5 < 30 else "🟡"
+                    st.write(f"{hit_color} **{hit_rate_l5:.0f}%**")
+                else:
+                    st.write("—")
+            
+            with window_tabs[1]:
+                if hit_rate_l10 is not None:
+                    hit_color = "🟢" if hit_rate_l10 >= 50 else "🔴" if hit_rate_l10 < 30 else "🟡"
+                    st.write(f"{hit_color} **{hit_rate_l10:.0f}%**")
+                else:
+                    st.write("—")
+            
+            with window_tabs[2]:
+                if hit_rate_season is not None:
+                    hit_color = "🟢" if hit_rate_season >= 50 else "🔴" if hit_rate_season < 30 else "🟡"
+                    st.write(f"{hit_color} **{hit_rate_season:.0f}%**")
+                else:
+                    st.write("—")
+            # --- END: MODIFIED CODE (Point 4) ---
 
         with row_cols[6]:
             st.write(row_data["opp_def"])
@@ -2449,108 +2456,92 @@ No game is selected yet — choose one in the sidebar to start.
 
     # final status
     status_placeholder.success("✅ Done.")
+
 def main():
-    # Initialize Firebase cache if available
-    try:
-        from utils import firebase_cache
-        firebase_cache.initialize_firebase()
-    except Exception as e:
-        print(f"[WARN] Could not initialize Firebase: {e}")
-    
     initialize_session_state_defaults()
-    initialize_bet_sheet()
 
     # ─────────────────────────────
-    # Top Navigation Area
+    # Sidebar Controls
     # ─────────────────────────────
-    
-    # Bet Sheet Expander at the top
-    bet_sheet_list = st.session_state.get('bet_sheet', [])
-    bet_count = len(bet_sheet_list) if bet_sheet_list else 0
-    with st.expander(f"📋 Bet Sheet ({bet_count})", expanded=False):
-        render_bet_sheet_area(current_season, prior_season)
-    
-    st.markdown("---")
-    
-    # Title
-    st.title("🏀 NBA Player Props Projection Model")
-    
-    # Settings & Filters Header
-    st.header("⚙️ Settings & Filters")
-    
-    # Create columns for navigation controls
-    nav_cols = st.columns([3, 2, 2, 3])
-    
-    # Column 1: Game Selection
-    with nav_cols[0]:
-        st.subheader("📅 Select Upcoming Game")
-        upcoming_games = get_upcoming_games(days=7)
-        selected_game = None
-        game_map = {}
+    st.sidebar.header("⚙️ Settings")
 
-        if upcoming_games:
-            sidebar_options = ["-- Select a Game --"]
-            for g in upcoming_games:
-                # ex: "Sat, Oct 25 - CHI @ ORL (7:30 PM)"
-                date_disp = g.get("date_display", "")
-                tm = f" ({g['time_display']})" if g.get("time_display") else ""
-                label = f"{date_disp} - {g['away']} @ {g['home']}{tm}"
-                sidebar_options.append(label)
-                game_map[label] = g
+    # Cache stats block
+    with st.sidebar.expander("💾 Cache Stats"):
+        cache_stats = get_cache_stats()
+        st.write(f"**Players cached:** {cache_stats.get('total_players', 0)}")
+        st.write(f"**Games cached:** {cache_stats.get('total_games', 0):,}")
+        st.write(f"**DB Size:** {cache_stats.get('db_size_mb', 0):.1f} MB")
 
-            picked_label = st.selectbox(
-                f"Upcoming games (next 3 days) - {len(upcoming_games)} found",
-                options=sidebar_options,
-                index=0,  # default to instruction line
+        if st.button("🗑️ Clear Old Seasons"):
+            clear_old_seasons([current_season, prior_season])
+            st.success("Old seasons cleared!")
+            st.rerun()
+
+    # Upcoming games dropdown with a default "Select" option
+    st.sidebar.subheader("📅 Select Upcoming Game")
+
+    upcoming_games = get_upcoming_games(days=7)
+    selected_game = None
+    game_map = {}
+
+    if upcoming_games:
+        sidebar_options = ["-- Select a Game --"]
+        for g in upcoming_games:
+            # ex: "Sat, Oct 25 - CHI @ ORL (7:30 PM)"
+            date_disp = g.get("date_display", "")
+            tm = f" ({g['time_display']})" if g.get("time_display") else ""
+            label = f"{date_disp} - {g['away']} @ {g['home']}{tm}"
+            sidebar_options.append(label)
+            game_map[label] = g
+
+        picked_label = st.sidebar.selectbox(
+            f"Upcoming games (next 3 days) - {len(upcoming_games)} found",
+            options=sidebar_options,
+            index=0,  # default to instruction line
+        )
+
+        if picked_label != "-- Select a Game --":
+            selected_game = game_map[picked_label]
+            st.sidebar.info(
+                f"Matchup: {selected_game['away']} @ {selected_game['home']}"
             )
+    else:
+        st.sidebar.warning("⚠️ No upcoming games in next 3 days.")
+        picked_label = None
+        selected_game = None
 
-            if picked_label != "-- Select a Game --":
-                selected_game = game_map[picked_label]
-                st.info(f"Matchup: {selected_game['away']} @ {selected_game['home']}")
-        else:
-            st.warning("⚠️ No upcoming games in next 7 days.")
-            picked_label = None
-            selected_game = None
-    
-    # Column 2: Stat Selection
-    with nav_cols[1]:
-        st.subheader("📊 Stat to Project")
-        stat_display_list = list(STAT_OPTIONS.keys())
-        stat_display_choice = st.selectbox(
-            "Choose stat to preview on the board",
-            options=stat_display_list,
-            index=0,
-            label_visibility="collapsed"
-        )
-        stat_code_choice = STAT_OPTIONS[stat_display_choice]
-    
-    # Column 3: Player Filter
-    with nav_cols[2]:
-        st.subheader("👥 Player Filter")
-        show_only_starters = st.radio(
-            "Filter players",
-            options=["Show All Players", "Show Only Starters"],
-            index=0,
-            help="Filter to show only projected starters (⭐) or all players",
-            label_visibility="collapsed"
-        )
-    
-    # Column 4: Search Player
-    with nav_cols[3]:
-        st.subheader("🔍 Search Player")
-        player_search_query = st.text_input(
-            "Search by player name",
-            value="",
-            placeholder="Type player name...",
-            help="Filter players by name (case-insensitive)",
-            label_visibility="collapsed"
-        )
-    
-    st.markdown("---")
+    # Which stat to predict on the board
+    st.sidebar.subheader("📊 Stat to Project")
+    stat_display_list = list(STAT_OPTIONS.keys())
+    stat_display_choice = st.sidebar.selectbox(
+        "Choose stat to preview on the board",
+        options=stat_display_list,
+        index=0,
+    )
+    stat_code_choice = STAT_OPTIONS[stat_display_choice]
+
+    # Player filter toggle
+    st.sidebar.subheader("👥 Player Filter")
+    show_only_starters = st.sidebar.radio(
+        "Filter players",
+        options=["Show All Players", "Show Only Starters"],
+        index=0,
+        help="Filter to show only projected starters (⭐) or all players"
+    )
+
+    # Player search bar
+    st.sidebar.subheader("🔍 Search Player")
+    player_search_query = st.sidebar.text_input(
+        "Search by player name",
+        value="",
+        placeholder="Type player name...",
+        help="Filter players by name (case-insensitive)"
+    )
 
     # ─────────────────────────────
-    # Manual Entry Modal (if needed)
+    # Bet Sheet Sidebar
     # ─────────────────────────────
+    initialize_bet_sheet()
     
     # Handle manual entry modal
     if st.session_state.get('bet_sheet_show_manual_modal', False):
@@ -2615,6 +2606,8 @@ def main():
                         st.session_state.bet_sheet_manual_entry = None
                         st.rerun()
     
+    render_bet_sheet_sidebar(current_season, prior_season)
+    
     # ─────────────────────────────
     # Main render call
     # ─────────────────────────────
@@ -2640,25 +2633,10 @@ def main():
         "**Note:** Projections are informational only. "
         "Always verify lines and context."
     )
-    
-    # ─────────────────────────────
-    # Cache Stats (moved from sidebar)
-    # ─────────────────────────────
-    st.markdown("---")
-    with st.expander("💾 Cache Stats", expanded=False):
-        cache_stats = get_cache_stats()
-        st.write(f"**Players cached:** {cache_stats.get('total_players', 0)}")
-        st.write(f"**Games cached:** {cache_stats.get('total_games', 0):,}")
-        st.write(f"**DB Size:** {cache_stats.get('db_size_mb', 0):.1f} MB")
 
-        if st.button("🗑️ Clear Old Seasons"):
-            clear_old_seasons([current_season, prior_season])
-            st.success("Old seasons cleared!")
-            st.rerun()
-
-def render_bet_sheet_area(cur_season, prev_season):
+def render_bet_sheet_sidebar(cur_season, prev_season):
     """
-    Render the bet sheet as a collapsible area in the main page.
+    Render the bet sheet as a collapsible sidebar section.
     """
     # FORCE initialize - make absolutely sure it exists
     if 'bet_sheet' not in st.session_state:
@@ -2695,49 +2673,32 @@ def render_bet_sheet_area(cur_season, prev_season):
         """, unsafe_allow_html=True)
         st.session_state.bet_sheet_toast = None
     
-    # Bet Sheet section - render directly (expander is handled in main function)
-    if bet_count == 0:
-        st.info("Your bet sheet is empty. Add players from the matchup board using the ➕ button.")
-    else:
-        # Check if we're editing a specific item
-        editing_id = st.session_state.get('bet_sheet_editing')
-        if editing_id:
-            editing_bet = next((b for b in st.session_state.bet_sheet if b.get('id') == editing_id), None)
-            if editing_bet:
-                with st.expander("✏️ Edit Bet Item", expanded=True):
-                    render_bet_item_edit_modal(editing_bet, cur_season, prev_season)
-                st.markdown("---")
-        
-        # Sort and filter controls
-        sort_option = st.selectbox(
-            "Sort by",
-            ["Player Name", "Hit Rate", "Line", "Stat"],
-            key="bet_sheet_sort"
-        )
-        
-        # Bulk controls
-        col_bulk1, col_bulk2 = st.columns(2)
-        
-        # Check if we should show the confirmation buttons
-        if st.session_state.get('bet_sheet_show_clear_confirm', False):
-            st.warning("⚠️ Are you sure you want to clear all bets?")
-            # Show confirmation buttons
-            with col_bulk1:
-                if st.button("✅ Yes, Clear All", key="confirm_clear_bets", use_container_width=True, type="primary"):
-                    clear_bet_sheet()
-                    st.session_state.bet_sheet_show_clear_confirm = False
-                    st.rerun()
-            with col_bulk2:
-                if st.button("❌ Cancel", key="cancel_clear_bets", use_container_width=True):
-                    st.session_state.bet_sheet_show_clear_confirm = False
-                    st.rerun()
+    # Bet Sheet section in sidebar - always expanded if there are items
+    with st.sidebar.expander(f"📋 Bet Sheet ({bet_count})", expanded=True):
+        if bet_count == 0:
+            st.info("Your bet sheet is empty. Add players from the matchup board using the ➕ button.")
         else:
-            # Show the normal "Clear All" and "Export" buttons
+            # Check if we're editing a specific item
+            editing_id = st.session_state.get('bet_sheet_editing')
+            if editing_id:
+                editing_bet = next((b for b in st.session_state.bet_sheet if b.get('id') == editing_id), None)
+                if editing_bet:
+                    with st.expander("✏️ Edit Bet Item", expanded=True):
+                        render_bet_item_edit_modal(editing_bet, cur_season, prev_season)
+                    st.markdown("---")
+            
+            # Sort and filter controls
+            sort_option = st.selectbox(
+                "Sort by",
+                ["Player Name", "Hit Rate", "Line", "Stat"],
+                key="bet_sheet_sort"
+            )
+            
+            # Bulk controls
+            col_bulk1, col_bulk2 = st.columns(2)
             with col_bulk1:
                 if st.button("🗑️ Clear All", key="clear_all_bets", use_container_width=True):
-                    # Don't clear yet! Just set the flag to show confirmation
-                    st.session_state.bet_sheet_show_clear_confirm = True
-                    st.rerun()
+                    clear_bet_sheet()
             
             with col_bulk2:
                 csv_data = export_bet_sheet_csv()
@@ -2750,24 +2711,24 @@ def render_bet_sheet_area(cur_season, prev_season):
                         key="export_bet_sheet",
                         use_container_width=True
                     )
-        
-        st.markdown("---")
-        
-        # Sort bets - use the actual list from session state
-        sorted_bets = bet_sheet_list.copy() if bet_sheet_list else []
-        if sort_option == "Player Name":
-            sorted_bets.sort(key=lambda x: x['player_name'])
-        elif sort_option == "Hit Rate":
-            sorted_bets.sort(key=lambda x: x.get('hit_rates', {}).get('L10', 0) or 0, reverse=True)
-        elif sort_option == "Line":
-            sorted_bets.sort(key=lambda x: x.get('line', 0) or 0)
-        elif sort_option == "Stat":
-            sorted_bets.sort(key=lambda x: x['stat_display'])
-        
-        # Render each bet item (skip the one being edited)
-        for idx, bet in enumerate(sorted_bets):
-            if bet.get('id') != editing_id:
-                render_bet_item(bet, cur_season, prev_season, index=idx)
+            
+            st.markdown("---")
+            
+            # Sort bets - use the actual list from session state
+            sorted_bets = bet_sheet_list.copy() if bet_sheet_list else []
+            if sort_option == "Player Name":
+                sorted_bets.sort(key=lambda x: x['player_name'])
+            elif sort_option == "Hit Rate":
+                sorted_bets.sort(key=lambda x: x.get('hit_rates', {}).get('L10', 0) or 0, reverse=True)
+            elif sort_option == "Line":
+                sorted_bets.sort(key=lambda x: x.get('line', 0) or 0)
+            elif sort_option == "Stat":
+                sorted_bets.sort(key=lambda x: x['stat_display'])
+            
+            # Render each bet item (skip the one being edited)
+            for idx, bet in enumerate(sorted_bets):
+                if bet.get('id') != editing_id:
+                    render_bet_item(bet, cur_season, prev_season, index=idx)
 
 
 def render_bet_item(bet, cur_season, prev_season, index=None):
@@ -2836,19 +2797,14 @@ def render_bet_item(bet, cur_season, prev_season, index=None):
             
             with col_line1:
                 btn_key_dec = f"betsheet_dec_{bet_id}{unique_key_suffix}"
-                # Disable ➖ button when line is 0.0 or less
-                is_disabled = (current_line is None or current_line <= 0.0)
-                if st.button("➖", key=btn_key_dec, help=f"Decrease by {step_size}", use_container_width=True, disabled=is_disabled):
+                if st.button("➖", key=btn_key_dec, help=f"Decrease by {step_size}", use_container_width=True):
                     if current_line is not None:
                         new_line = max(0.0, round(current_line - step_size, 1))  # Prevent negative values
-                    else:
-                        new_line = 0.0
-                    update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+                        update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
             
             with col_line2:
-                # Display current line value (show 0.0 instead of "—")
-                line_display = float(current_line) if current_line is not None else 0.0
-                st.write(f"**{line_display:.1f}**")
+                # Display current line value
+                st.write(f"**{current_line:.1f}**" if current_line is not None else "—")
                 # Also allow manual editing via number input
                 edited_line = st.number_input(
                     "Line",
@@ -2931,19 +2887,15 @@ def render_bet_item_edit_modal(bet, cur_season, prev_season):
     col_line1, col_line2, col_line3 = st.columns([1, 2, 1])
     with col_line1:
         btn_key_dec = f"modal_dec_{bet_id}"
-        # Disable ➖ button when line is 0.0 or less
-        is_disabled = (current_line is None or current_line <= 0.0)
-        if st.button("➖", key=btn_key_dec, help=f"Decrease by {step_size}", use_container_width=True, disabled=is_disabled):
+        if st.button("➖", key=btn_key_dec, help=f"Decrease by {step_size}", use_container_width=True):
             if current_line is not None:
                 new_line = max(0.0, round(current_line - step_size, 1))  # Prevent negative values
-            else:
-                new_line = 0.0
-            update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
+                update_bet_sheet_item(bet_id, {'line': new_line}, cur_season, prev_season)
     
     with col_line2:
-        # Display current line (show 0.0 instead of "—")
-        line_display = float(current_line) if current_line is not None else 0.0
-        st.write(f"**{line_display:.1f}**")
+        # Display current line
+        if current_line is not None:
+            st.write(f"**{current_line:.1f}**")
         new_line_input = st.number_input(
             "Line",
             min_value=0.0,

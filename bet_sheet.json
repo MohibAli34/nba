@@ -1,84 +1,44 @@
 {
   "bet_sheet": [
     {
-      "id": "1629622_PTS_1.0_1763013909934",
-      "player_name": "Max Strus",
-      "player_id": "1629622",
-      "team_abbrev": "CLE",
+      "id": "203903_PTS_5.0_1763117927625",
+      "player_name": "Jordan Clarkson",
+      "player_id": "203903",
+      "team_abbrev": "NYK",
       "stat_code": "PTS",
       "stat_display": "Points",
-      "projection": 11.43506,
-      "line": 1.0,
+      "projection": 9.637297297297298,
+      "line": 5.0,
       "line_source": "manual",
-      "edge": "+10.4 (+1043.5%)",
+      "edge": "+4.6 (+92.7%)",
       "stake": null,
       "hit_rates": {
-        "L5": 100.0,
-        "L10": 100.0,
-        "Season": 100.0
+        "L5": 0.0,
+        "L10": 0.0,
+        "Season": 0.0
       },
       "hit_rate_window": "L10",
-      "timestamp": "2025-11-13T11:05:09.934905"
+      "timestamp": "2025-11-14T15:58:47.632774"
     },
     {
-      "id": "1628366_PTS_0.5_1763013937945",
-      "player_name": "Lonzo Ball",
-      "player_id": "1628366",
-      "team_abbrev": "CLE",
+      "id": "1630540_PTS_5.4_1763117947576",
+      "player_name": "Miles McBride",
+      "player_id": "1630540",
+      "team_abbrev": "NYK",
       "stat_code": "PTS",
       "stat_display": "Points",
-      "projection": 8.110285714285714,
-      "line": 0.5,
+      "projection": 9.386890625,
+      "line": 5.4,
       "line_source": "manual",
-      "edge": "+7.6 (+1522.1%)",
-      "stake": null,
-      "hit_rates": {
-        "L5": 100.0,
-        "L10": 100.0,
-        "Season": 100.0
-      },
-      "hit_rate_window": "L10",
-      "timestamp": "2025-11-13T11:05:37.945551"
-    },
-    {
-      "id": "1629622_PTS_0.0_1763017029396",
-      "player_name": "Max Strus",
-      "player_id": "1629622",
-      "team_abbrev": "CLE",
-      "stat_code": "PTS",
-      "stat_display": "Points",
-      "projection": 11.43506,
-      "line": 0.0,
-      "line_source": "manual",
-      "edge": "+11.4 (+0.0%)",
-      "stake": null,
-      "hit_rates": {
-        "L5": 100.0,
-        "L10": 100.0,
-        "Season": 100.0
-      },
-      "hit_rate_window": "L10",
-      "timestamp": "2025-11-13T11:57:09.396782"
-    },
-    {
-      "id": "1629622_PTS_0.0_1763019595294",
-      "player_name": "Max Strus",
-      "player_id": "1629622",
-      "team_abbrev": "CLE",
-      "stat_code": "PTS",
-      "stat_display": "Points",
-      "projection": 11.43506,
-      "line": 0.0,
-      "line_source": "manual",
-      "edge": "+11.4 (+0.0%)",
+      "edge": "+4.0 (+73.8%)",
       "stake": null,
       "hit_rates": {
         "L5": 20.0,
-        "L10": 10.0,
-        "Season": 30.0
+        "L10": 15.0,
+        "Season": 37.5
       },
       "hit_rate_window": "L10",
-      "timestamp": "2025-11-13T12:39:55.294069"
+      "timestamp": "2025-11-14T15:59:07.576292"
     }
   ],
   "bet_sheet_settings": {

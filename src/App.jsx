@@ -9,7 +9,7 @@ import {
   setDoc,
   Timestamp,
 } from "firebase/firestore";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "firebase/auth";
 
 // --- Firebase Config ---
 const firebaseConfig = {
@@ -738,7 +738,9 @@ function HomePage({
   onLoadNextGame,
 }) {
   const hasMoreGames = gamesList.length > 0 && currentGameIndex < gamesList.length - 1;
-  const nextGame = hasMoreGames ? gamesList[currentGameIndex + 1] : null;
+  const nextGame = hasMoreGames && currentGameIndex + 1 < gamesList.length 
+    ? gamesList[currentGameIndex + 1] 
+    : null;
 
   return (
     <>
@@ -958,6 +960,16 @@ export default function App() {
     }
   }, [darkMode]);
 
+  // Effect to ensure currentGameIndex is always within bounds
+  useEffect(() => {
+    if (gamesList.length > 0 && currentGameIndex >= gamesList.length) {
+      console.warn(`Data Fetch: currentGameIndex ${currentGameIndex} out of bounds, clamping to ${gamesList.length - 1}`);
+      setCurrentGameIndex(Math.max(0, gamesList.length - 1));
+    } else if (gamesList.length === 0 && currentGameIndex !== 0) {
+      setCurrentGameIndex(0);
+    }
+  }, [gamesList.length, currentGameIndex]);
+
   // Effect for Firebase Auth
   useEffect(() => {
     if (!auth) {
@@ -1007,6 +1019,12 @@ export default function App() {
 
   // Function to fetch a single game by index
   const fetchGameData = useCallback(async (gameIndex) => {
+    // Validate gameIndex bounds
+    if (gameIndex < 0 || gameIndex >= gamesList.length) {
+      console.warn(`Data Fetch: Invalid gameIndex ${gameIndex} (gamesList.length: ${gamesList.length})`);
+      return;
+    }
+    
     const cacheKey = getTodayCacheKey();
     const appId =
       typeof __app_id !== "undefined" ? __app_id : "default-app-id";
@@ -1038,38 +1056,50 @@ export default function App() {
         throw new Error("API did not return an array.");
       }
 
+      // Validate and sanitize game data
+      const sanitizedGameData = gameData.filter((player) => {
+        return (
+          player &&
+          typeof player === "object" &&
+          player.id &&
+          player.playerName &&
+          typeof player.projection === "number"
+        );
+      });
+
       // Add new players from this game to the existing list
       setAllPlayers((prevPlayers) => {
-        const updatedPlayers = [...prevPlayers, ...gameData];
+        const updatedPlayers = [...prevPlayers, ...sanitizedGameData];
         
         // Save to Firestore cache (best-effort only)
-        const cacheDocRef = doc(
-          db,
-          "artifacts",
-          appId,
-          "public/data/nba_props_cache",
-          cacheKey
-        );
-        
-        setDoc(cacheDocRef, {
-          playerData: JSON.stringify(updatedPlayers),
-          timestamp: Timestamp.now(),
-        })
-          .then(() => {
-            console.log(`Data Fetch: Saved game ${gameIndex + 1} to cache.`);
+        // Use a flat collection structure instead of nested paths
+        try {
+          const cacheDocRef = doc(db, "nba_props_cache", `${appId}_${cacheKey}`);
+          
+          setDoc(cacheDocRef, {
+            playerData: JSON.stringify(updatedPlayers),
+            timestamp: Timestamp.now(),
+            appId: appId,
+            cacheKey: cacheKey,
           })
-          .catch((cacheWriteErr) => {
-            console.warn(
-              "Data Fetch: Cache write failed. Proceeding without persisting cache.",
-              cacheWriteErr
-            );
-          });
+            .then(() => {
+              console.log(`Data Fetch: Saved game ${gameIndex + 1} to cache.`);
+            })
+            .catch((cacheWriteErr) => {
+              console.warn(
+                "Data Fetch: Cache write failed. Proceeding without persisting cache.",
+                cacheWriteErr
+              );
+            });
+        } catch (cacheErr) {
+          console.warn("Data Fetch: Cache setup failed:", cacheErr);
+        }
 
         return updatedPlayers;
       });
 
       console.log(
-        `Data Fetch: Game ${gameIndex + 1} complete. Players: ${gameData.length}`
+        `Data Fetch: Game ${gameIndex + 1} complete. Players: ${sanitizedGameData.length}`
       );
       setLoadingProgress(""); // Clear progress message
     } catch (err) {
@@ -1083,13 +1113,26 @@ export default function App() {
 
   // Function to load next game
   const loadNextGame = useCallback(async () => {
+    // Validate bounds before proceeding
+    if (gamesList.length === 0) {
+      console.log("Data Fetch: No games available.");
+      return;
+    }
+    
     if (currentGameIndex >= gamesList.length - 1) {
       console.log("Data Fetch: All games have been fetched.");
       return;
     }
 
-    setDataLoading(true);
     const nextIndex = currentGameIndex + 1;
+    
+    // Double-check bounds before accessing
+    if (nextIndex < 0 || nextIndex >= gamesList.length) {
+      console.warn(`Data Fetch: Invalid nextIndex ${nextIndex} (gamesList.length: ${gamesList.length})`);
+      return;
+    }
+
+    setDataLoading(true);
     setCurrentGameIndex(nextIndex);
     await fetchGameData(nextIndex);
     setDataLoading(false);
@@ -1112,14 +1155,8 @@ export default function App() {
       const cacheKey = getTodayCacheKey();
       const appId =
         typeof __app_id !== "undefined" ? __app_id : "default-app-id";
-      // This is the public cache, shared by all users.
-      const cacheDocRef = doc(
-        db,
-        "artifacts",
-        appId,
-        "public/data/nba_props_cache",
-        cacheKey
-      );
+      // Use a flat collection structure instead of nested paths
+      const cacheDocRef = doc(db, "nba_props_cache", `${appId}_${cacheKey}`);
 
       try {
         // 1. Check Firestore Cache
@@ -1137,27 +1174,50 @@ export default function App() {
         if (cacheDoc?.exists()) {
           console.log("Data Fetch: Cache HIT.");
           const cacheData = cacheDoc.data();
-          // Check if cache is stale (e.g., older than 4 hours)
-          const cacheAgeHours =
-            (Timestamp.now().seconds - cacheData.timestamp.seconds) / 3600;
-
-          if (cacheAgeHours < 4) {
-            console.log("Data Fetch: Cache is fresh. Loading from Firestore.");
-            setAllPlayers(JSON.parse(cacheData.playerData));
-            setDataLoading(false);
-            // Still fetch games list to show "Search Next Game" button if needed
-            const gamesResponse = await fetch("/api/get_games");
-            if (gamesResponse.ok) {
-              const games = await gamesResponse.json();
-              if (Array.isArray(games)) {
-                setGamesList(games);
-                // Set current index to last game if we have cached data
-                setCurrentGameIndex(games.length - 1);
-              }
-            }
-            return; // We are done, loaded from cache
+          
+          // Validate cache data structure
+          if (!cacheData || !cacheData.playerData || !cacheData.timestamp) {
+            console.log("Data Fetch: Cache data invalid. Fetching new data.");
           } else {
-            console.log("Data Fetch: Cache is stale. Fetching new data.");
+            // Check if cache is stale (e.g., older than 4 hours)
+            const cacheTimestamp = cacheData.timestamp;
+            let cacheAgeHours = 999; // Default to stale if we can't calculate
+            
+            if (cacheTimestamp && cacheTimestamp.seconds) {
+              cacheAgeHours = (Timestamp.now().seconds - cacheTimestamp.seconds) / 3600;
+            } else if (cacheTimestamp && typeof cacheTimestamp === 'number') {
+              cacheAgeHours = (Date.now() / 1000 - cacheTimestamp) / 3600;
+            }
+
+            if (cacheAgeHours < 4) {
+              console.log("Data Fetch: Cache is fresh. Loading from Firestore.");
+              try {
+                const parsedData = JSON.parse(cacheData.playerData);
+                if (Array.isArray(parsedData)) {
+                  setAllPlayers(parsedData);
+                  setDataLoading(false);
+                  // Still fetch games list to show "Search Next Game" button if needed
+                  const gamesResponse = await fetch("/api/get_games");
+                  if (gamesResponse.ok) {
+                    const games = await gamesResponse.json();
+                    if (Array.isArray(games)) {
+                      setGamesList(games);
+                      // Set current index to last game if we have cached data
+                      // Ensure index is within bounds
+                      const safeIndex = games.length > 0 ? Math.max(0, games.length - 1) : 0;
+                      setCurrentGameIndex(safeIndex);
+                    }
+                  }
+                  return; // We are done, loaded from cache
+                } else {
+                  console.log("Data Fetch: Cached data is not an array. Fetching new data.");
+                }
+              } catch (parseErr) {
+                console.warn("Data Fetch: Failed to parse cached data:", parseErr);
+              }
+            } else {
+              console.log("Data Fetch: Cache is stale. Fetching new data.");
+            }
           }
         } else {
           console.log("Data Fetch: Cache MISS.");
@@ -1189,7 +1249,8 @@ export default function App() {
         }
 
         setGamesList(games);
-        setCurrentGameIndex(0);
+        // Ensure index is within bounds (0 if games.length is 0)
+        setCurrentGameIndex(games.length > 0 ? 0 : 0);
 
         // 3. Fetch only the first game (use local games variable to avoid closure issue)
         console.log(`Data Fetch: Found ${games.length} games. Loading first game...`);
@@ -1216,38 +1277,50 @@ export default function App() {
               throw new Error("API did not return an array.");
             }
 
+            // Validate and sanitize game data
+            const sanitizedGameData = gameData.filter((player) => {
+              return (
+                player &&
+                typeof player === "object" &&
+                player.id &&
+                player.playerName &&
+                typeof player.projection === "number"
+              );
+            });
+
             // Add new players from this game to the existing list
             setAllPlayers((prevPlayers) => {
-              const updatedPlayers = [...prevPlayers, ...gameData];
+              const updatedPlayers = [...prevPlayers, ...sanitizedGameData];
               
               // Save to Firestore cache (best-effort only)
-              const cacheDocRef = doc(
-                db,
-                "artifacts",
-                appId,
-                "public/data/nba_props_cache",
-                cacheKey
-              );
-              
-              setDoc(cacheDocRef, {
-                playerData: JSON.stringify(updatedPlayers),
-                timestamp: Timestamp.now(),
-              })
-                .then(() => {
-                  console.log(`Data Fetch: Saved game 1 to cache.`);
+              // Use a flat collection structure instead of nested paths
+              try {
+                const cacheDocRef = doc(db, "nba_props_cache", `${appId}_${cacheKey}`);
+                
+                setDoc(cacheDocRef, {
+                  playerData: JSON.stringify(updatedPlayers),
+                  timestamp: Timestamp.now(),
+                  appId: appId,
+                  cacheKey: cacheKey,
                 })
-                .catch((cacheWriteErr) => {
-                  console.warn(
-                    "Data Fetch: Cache write failed. Proceeding without persisting cache.",
-                    cacheWriteErr
-                  );
-                });
+                  .then(() => {
+                    console.log(`Data Fetch: Saved game 1 to cache.`);
+                  })
+                  .catch((cacheWriteErr) => {
+                    console.warn(
+                      "Data Fetch: Cache write failed. Proceeding without persisting cache.",
+                      cacheWriteErr
+                    );
+                  });
+              } catch (cacheErr) {
+                console.warn("Data Fetch: Cache setup failed:", cacheErr);
+              }
 
               return updatedPlayers;
             });
 
             console.log(
-              `Data Fetch: Game 1 complete. Players: ${gameData.length}`
+              `Data Fetch: Game 1 complete. Players: ${sanitizedGameData.length}`
             );
             setLoadingProgress(""); // Clear progress message
           } catch (err) {
