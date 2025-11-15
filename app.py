@@ -1865,17 +1865,25 @@ No game is selected yet — choose one in the sidebar to start.
     with cache_status_placeholder.container():
         st.info("🔄 Checking cache for game data...")
     
-    game_data = get_cached_game_data(
-        home_team=home_team,
-        away_team=away_team,
-        cur_season=cur_season,
-        prev_season=prev_season,
-        game_date=game_date,
-        max_age_hours=24
-    )
+    try:
+        # Use st.spinner to show progress and prevent hanging
+        with st.spinner("Loading game data... This may take a minute on first load."):
+            game_data = get_cached_game_data(
+                home_team=home_team,
+                away_team=away_team,
+                cur_season=cur_season,
+                prev_season=prev_season,
+                game_date=game_date,
+                max_age_hours=24
+            )
+    except Exception as e:
+        st.error(f"❌ Error loading game data: {str(e)}")
+        st.info("💡 Tip: Check Streamlit Cloud logs for more details. The app may be fetching data from APIs for the first time.")
+        return
     
     if not game_data:
         cache_status_placeholder.error("❌ Failed to load game data. Please try again.")
+        cache_status_placeholder.info("💡 This might be due to API rate limits or network issues. Try refreshing the page.")
         return
     
     # Show cache status to user

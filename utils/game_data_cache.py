@@ -153,8 +153,12 @@ def get_cached_game_data(
     cache_key = get_game_cache_key(home_team, away_team, game_date)
     print(f"[GAME_CACHE] Getting game data for {away_team} @ {home_team} (key: {cache_key})")
     
-    # Try to get from cache
-    cached_data = firebase_cache.get_cached_data(cache_key, max_age_hours)
+    # Try to get from cache with short timeout (don't hang if Firebase is slow)
+    try:
+        cached_data = firebase_cache.get_cached_data(cache_key, max_age_hours, timeout_seconds=5.0)
+    except Exception as e:
+        print(f"[GAME_CACHE] [ERROR] Cache check failed: {e}. Fetching from API instead...")
+        cached_data = None
     
     if cached_data is not None:
         print(f"[GAME_CACHE] [OK] Using CACHED game data for {away_team} @ {home_team}")

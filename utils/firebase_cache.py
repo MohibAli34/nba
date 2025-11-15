@@ -95,13 +95,14 @@ def get_firestore_db():
     return _db
 
 
-def get_cached_data(cache_key: str, max_age_hours: int = 24) -> Optional[Dict[str, Any]]:
+def get_cached_data(cache_key: str, max_age_hours: int = 24, timeout_seconds: float = 5.0) -> Optional[Dict[str, Any]]:
     """
     Get cached data from Firebase if it exists and is not older than max_age_hours.
     
     Args:
         cache_key: Unique key for the cached data
         max_age_hours: Maximum age in hours (default 24)
+        timeout_seconds: Maximum time to wait for Firebase call (default 5.0)
     
     Returns:
         The cached data if found and fresh, None otherwise
@@ -115,7 +116,30 @@ def get_cached_data(cache_key: str, max_age_hours: int = 24) -> Optional[Dict[st
         print(f"[CACHE] [SEARCH] Checking cache for: {cache_key}")
         start_time = time.time()
         doc_ref = db.collection('api_cache').document(cache_key)
-        doc = doc_ref.get()
+        
+        # Add timeout handling using threading (cross-platform compatible)
+        import threading
+        result_container = {'doc': None, 'exception': None}
+        
+        def fetch_doc():
+            try:
+                result_container['doc'] = doc_ref.get()
+            except Exception as e:
+                result_container['exception'] = e
+        
+        thread = threading.Thread(target=fetch_doc)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout=timeout_seconds)
+        
+        if thread.is_alive():
+            print(f"[CACHE] [TIMEOUT] Firebase query timed out after {timeout_seconds}s")
+            raise TimeoutError(f"Firebase query timed out after {timeout_seconds}s")
+        
+        if result_container['exception']:
+            raise result_container['exception']
+        
+        doc = result_container['doc']
         fetch_time = time.time() - start_time
         
         if not doc.exists:
@@ -157,8 +181,13 @@ def get_cached_data(cache_key: str, max_age_hours: int = 24) -> Optional[Dict[st
         
         print(f"[CACHE] [WARN] No timestamp found in cache for {cache_key}")
         return None
+    except TimeoutError as e:
+        print(f"[CACHE] [TIMEOUT] {e}")
+        print(f"[CACHE] [WARN] Skipping Firebase cache due to timeout")
+        return None
     except Exception as e:
         print(f"[CACHE] [ERROR] ERROR reading from Firebase cache for {cache_key}: {e}")
+        print(f"[CACHE] [WARN] Skipping Firebase cache and will fetch from API")
         import traceback
         traceback.print_exc()
         return None
