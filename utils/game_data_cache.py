@@ -315,13 +315,33 @@ def get_cached_game_data(
             final_away_count = len(final_away) if isinstance(final_away, (list, pd.DataFrame)) else (0 if not final_away else len(final_away) if hasattr(final_away, '__len__') else 0)
             
             if final_home_count > 0 or final_away_count > 0:
-                print(f"[GAME_CACHE] [INFO] After refresh: {final_home_count} home players, {final_away_count} away players")
+                print(f"[GAME_CACHE] [INFO] ✅ After refresh: {final_home_count} home players, {final_away_count} away players")
+                # Ensure rosters are properly converted back to DataFrames after refresh
+                if isinstance(final_home, list) and len(final_home) > 0:
+                    cached_data['home_roster'] = pd.DataFrame(final_home)
+                if isinstance(final_away, list) and len(final_away) > 0:
+                    cached_data['away_roster'] = pd.DataFrame(final_away)
             else:
-                print(f"[GAME_CACHE] [WARN] After refresh: still no rosters available")
+                print(f"[GAME_CACHE] [WARN] ⚠️ After refresh: still no rosters available")
+                print(f"[GAME_CACHE] [WARN] This usually means the NBA API is still unavailable or timing out")
+        
+        # Final check - ensure rosters are DataFrames before returning
+        if isinstance(cached_data.get('home_roster'), list):
+            cached_data['home_roster'] = pd.DataFrame(cached_data['home_roster']) if cached_data['home_roster'] else pd.DataFrame()
+        if isinstance(cached_data.get('away_roster'), list):
+            cached_data['away_roster'] = pd.DataFrame(cached_data['away_roster']) if cached_data['away_roster'] else pd.DataFrame()
         
         # Add cache status indicator
         cached_data['_cache_status'] = 'HIT'
         cached_data['_cache_key'] = cache_key
+        
+        # Final verification before returning
+        final_home_check = cached_data.get('home_roster', [])
+        final_away_check = cached_data.get('away_roster', [])
+        final_home_count_check = len(final_home_check) if isinstance(final_home_check, (pd.DataFrame, list)) else 0
+        final_away_count_check = len(final_away_check) if isinstance(final_away_check, (pd.DataFrame, list)) else 0
+        print(f"[GAME_CACHE] [RETURN] Returning with {final_home_count_check} home players, {final_away_count_check} away players")
+        
         return cached_data
     
     # Cache miss or stale - fetch from API
