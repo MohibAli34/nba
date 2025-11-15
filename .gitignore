@@ -11,6 +11,7 @@ ENV/
 
 # Streamlit
 .streamlit/
+!.streamlit/config.toml
 
 nba-props-app-57fec-firebase-adminsdk-fbsvc-047c134065.json
 # Data cache
