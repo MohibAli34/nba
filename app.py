@@ -1865,6 +1865,7 @@ No game is selected yet — choose one in the sidebar to start.
     with cache_status_placeholder.container():
         st.info("🔄 Checking cache for game data...")
     
+    # Always try to load data - error handling is built into the functions
     try:
         # Use st.spinner to show progress and prevent hanging
         with st.spinner("Loading game data... This may take a minute on first load."):
@@ -1877,14 +1878,44 @@ No game is selected yet — choose one in the sidebar to start.
                 max_age_hours=24
             )
     except Exception as e:
-        st.error(f"❌ Error loading game data: {str(e)}")
-        st.info("💡 Tip: Check Streamlit Cloud logs for more details. The app may be fetching data from APIs for the first time.")
-        return
+        print(f"[ERROR] Unexpected error in get_cached_game_data: {e}")
+        import traceback
+        traceback.print_exc()
+        # Create minimal data structure so app can continue
+        game_data = {
+            'home_team': home_team,
+            'away_team': away_team,
+            'game_date': game_date,
+            'cur_season': cur_season,
+            'prev_season': prev_season,
+            'home_roster': [],
+            'away_roster': [],
+            'starters_dict': {},
+            'event_id': None,
+            'odds_data': {},
+            'def_vs_pos_df': [],
+            'team_stats': [],
+            '_cache_status': 'ERROR',
+        }
+        cache_status_placeholder.warning("⚠️ Some data failed to load, but continuing with available data.")
     
+    # Ensure we have a valid game_data dict (should always be true now)
     if not game_data:
-        cache_status_placeholder.error("❌ Failed to load game data. Please try again.")
-        cache_status_placeholder.info("💡 This might be due to API rate limits or network issues. Try refreshing the page.")
-        return
+        game_data = {
+            'home_team': home_team,
+            'away_team': away_team,
+            'game_date': game_date,
+            'cur_season': cur_season,
+            'prev_season': prev_season,
+            'home_roster': [],
+            'away_roster': [],
+            'starters_dict': {},
+            'event_id': None,
+            'odds_data': {},
+            'def_vs_pos_df': [],
+            'team_stats': [],
+            '_cache_status': 'EMPTY',
+        }
     
     # Show cache status to user
     cache_status = game_data.get('_cache_status', 'UNKNOWN')

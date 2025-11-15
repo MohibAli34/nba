@@ -46,9 +46,10 @@ def fetch_game_data_internal(
     """
     Internal function to fetch ALL game data from APIs.
     This is called only when cache is missing or stale.
+    All API calls are wrapped in try/except to ensure the function always returns data.
     
     Returns:
-        Dictionary containing all game data:
+        Dictionary containing all game data (even if some parts failed):
         - rosters (home_roster, away_roster)
         - starters (starters_dict)
         - event_id
@@ -68,6 +69,7 @@ def fetch_game_data_internal(
     
     print(f"[INFO] Fetching fresh game data for {away_team} @ {home_team}...")
     
+    # Initialize with defaults - ensures we always return something
     game_data = {
         'home_team': home_team,
         'away_team': away_team,
@@ -75,52 +77,76 @@ def fetch_game_data_internal(
         'cur_season': cur_season,
         'prev_season': prev_season,
         'fetched_at': datetime.now().isoformat(),
+        'home_roster': [],
+        'away_roster': [],
+        'starters_dict': {},
+        'event_id': None,
+        'odds_data': {},
+        'def_vs_pos_df': [],
+        'team_stats': [],
     }
     
-    # Fetch rosters
+    # Fetch rosters with error handling
     print(f"[INFO] Fetching rosters...")
-    home_roster = get_players_by_team(home_team, season=cur_season)
-    if home_roster.empty:
-        home_roster = get_players_by_team(home_team, season=prev_season)
-    if not home_roster.empty:
-        home_roster["team_abbrev"] = home_team
+    try:
+        home_roster = get_players_by_team(home_team, season=cur_season)
+        if home_roster.empty:
+            home_roster = get_players_by_team(home_team, season=prev_season)
+        if not home_roster.empty:
+            home_roster["team_abbrev"] = home_team
+            game_data['home_roster'] = home_roster.to_dict('records')
+    except Exception as e:
+        print(f"[WARN] Failed to fetch home roster: {e}")
     
-    away_roster = get_players_by_team(away_team, season=cur_season)
-    if away_roster.empty:
-        away_roster = get_players_by_team(away_team, season=prev_season)
-    if not away_roster.empty:
-        away_roster["team_abbrev"] = away_team
+    try:
+        away_roster = get_players_by_team(away_team, season=cur_season)
+        if away_roster.empty:
+            away_roster = get_players_by_team(away_team, season=prev_season)
+        if not away_roster.empty:
+            away_roster["team_abbrev"] = away_team
+            game_data['away_roster'] = away_roster.to_dict('records')
+    except Exception as e:
+        print(f"[WARN] Failed to fetch away roster: {e}")
     
-    # Convert DataFrames to dict for JSON serialization
-    game_data['home_roster'] = home_roster.to_dict('records') if isinstance(home_roster, pd.DataFrame) and not home_roster.empty else []
-    game_data['away_roster'] = away_roster.to_dict('records') if isinstance(away_roster, pd.DataFrame) and not away_roster.empty else []
-    
-    # Fetch starters
+    # Fetch starters with error handling
     print(f"[INFO] Fetching starters...")
-    starters_dict = scrape_rotowire_starters()
-    game_data['starters_dict'] = starters_dict
+    try:
+        starters_dict = scrape_rotowire_starters()
+        if starters_dict:
+            game_data['starters_dict'] = starters_dict
+    except Exception as e:
+        print(f"[WARN] Failed to fetch starters: {e}")
     
-    # Fetch event ID and odds
+    # Fetch event ID and odds with error handling
     print(f"[INFO] Fetching event ID and odds...")
-    event_id = get_event_id_for_game(home_team, away_team)
-    game_data['event_id'] = event_id
+    try:
+        event_id = get_event_id_for_game(home_team, away_team)
+        game_data['event_id'] = event_id
+        
+        if event_id:
+            odds_data = fetch_fanduel_lines(event_id)
+            if odds_data:
+                game_data['odds_data'] = odds_data
+    except Exception as e:
+        print(f"[WARN] Failed to fetch event ID/odds: {e}")
     
-    if event_id:
-        odds_data = fetch_fanduel_lines(event_id)
-        game_data['odds_data'] = odds_data
-    else:
-        game_data['odds_data'] = {}
-    
-    # Fetch shared data (defense vs position, team stats)
+    # Fetch shared data with error handling
     print(f"[INFO] Fetching shared data...")
-    def_vs_pos_df = scrape_defense_vs_position_cached_db()
-    team_stats = get_team_stats_cached_db(season=prev_season)
+    try:
+        def_vs_pos_df = scrape_defense_vs_position_cached_db()
+        if isinstance(def_vs_pos_df, pd.DataFrame) and not def_vs_pos_df.empty:
+            game_data['def_vs_pos_df'] = def_vs_pos_df.to_dict('records')
+    except Exception as e:
+        print(f"[WARN] Failed to fetch defense vs position: {e}")
     
-    # Convert DataFrames to dict for JSON serialization
-    game_data['def_vs_pos_df'] = def_vs_pos_df.to_dict('records') if isinstance(def_vs_pos_df, pd.DataFrame) and not def_vs_pos_df.empty else []
-    game_data['team_stats'] = team_stats.to_dict('records') if isinstance(team_stats, pd.DataFrame) and not team_stats.empty else []
+    try:
+        team_stats = get_team_stats_cached_db(season=prev_season)
+        if isinstance(team_stats, pd.DataFrame) and not team_stats.empty:
+            game_data['team_stats'] = team_stats.to_dict('records')
+    except Exception as e:
+        print(f"[WARN] Failed to fetch team stats: {e}")
     
-    print(f"[INFO] Game data fetched successfully")
+    print(f"[INFO] Game data fetched (some parts may have failed, but continuing)")
     return game_data
 
 
@@ -174,12 +200,33 @@ def get_cached_game_data(
     print(f"[GAME_CACHE] [REFRESH] Cache MISS/STALE for {cache_key}, fetching from API...")
     import time
     start_time = time.time()
-    fresh_data = fetch_game_data_internal(home_team, away_team, cur_season, prev_season, game_date)
-    fetch_time = time.time() - start_time
-    print(f"[GAME_CACHE] [TIME] API fetch completed in {fetch_time:.2f} seconds")
     
-    # Store in cache
-    if fresh_data is not None:
+    # Always fetch from API - function has error handling built in
+    try:
+        fresh_data = fetch_game_data_internal(home_team, away_team, cur_season, prev_season, game_date)
+        fetch_time = time.time() - start_time
+        print(f"[GAME_CACHE] [TIME] API fetch completed in {fetch_time:.2f} seconds")
+    except Exception as e:
+        print(f"[GAME_CACHE] [ERROR] API fetch failed: {e}. Returning empty data structure.")
+        # Return minimal data structure so app doesn't crash
+        fresh_data = {
+            'home_team': home_team,
+            'away_team': away_team,
+            'game_date': game_date,
+            'cur_season': cur_season,
+            'prev_season': prev_season,
+            'home_roster': [],
+            'away_roster': [],
+            'starters_dict': {},
+            'event_id': None,
+            'odds_data': {},
+            'def_vs_pos_df': [],
+            'team_stats': [],
+        }
+        fetch_time = time.time() - start_time
+    
+    # Store in cache (if we got data)
+    if fresh_data:
         # Convert DataFrames to dict for storage
         serializable_data = _prepare_for_storage(fresh_data)
         cache_saved = firebase_cache.set_cached_data(cache_key, serializable_data)
