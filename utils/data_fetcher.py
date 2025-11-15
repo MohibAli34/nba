@@ -113,7 +113,7 @@ def get_player_id(player_name):
 # -------------------------------------------------
 # Game logs (direct from nba_api; *not* the sqlite cache version)
 # -------------------------------------------------
-@st.cache_data(ttl=3600)
+@_safe_cache_data(ttl=3600)
 def get_player_game_logs_cached(player_id, season="2024-25"):
     """
     Get player game logs for a season via nba_api.
@@ -147,7 +147,7 @@ def get_player_game_logs_cached(player_id, season="2024-25"):
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600)
+@_safe_cache_data(ttl=3600)
 def get_team_stats_cached(season="2024-25"):
     """
     Get team per-game metrics from nba_api.
@@ -184,7 +184,7 @@ def get_team_stats_cached(season="2024-25"):
 # -------------------------------------------------
 # Opponent / matchup context
 # -------------------------------------------------
-@st.cache_data(ttl=3600)
+@_safe_cache_data(ttl=3600)
 def get_opponent_recent_games(opponent_abbrev, season="2024-25", last_n=10):
     """Get opponent's recent games for defensive trend stuff."""
     try:
@@ -513,7 +513,7 @@ def _get_event_id_for_game_internal(
         return None
 
 
-@st.cache_data(ttl=3600)
+@_safe_cache_data(ttl=3600)
 def get_event_id_for_game(
     home_team, away_team, api_key=None
 ):
@@ -709,7 +709,7 @@ def get_all_nba_teams():
     return sorted([team["abbreviation"] for team in all_teams])
 
 
-@st.cache_data(ttl=3600)
+@_safe_cache_data(ttl=3600)
 def get_player_current_team(player_id, season="2025-26"):
     """
     Infer player's current/most recent team abbrev by looking at their most recent game.
@@ -752,7 +752,7 @@ def get_player_current_team(player_id, season="2025-26"):
 # -------------------------------------------------
 # 🆕 Position resolver with persistent sqlite caching
 # -------------------------------------------------
-@st.cache_data(ttl=3600)
+@_safe_cache_data(ttl=3600)
 def get_player_position(player_id, season="2024-25"):
     """
     Return player's primary position ('G', 'F', or 'C'), but:
@@ -1024,7 +1024,7 @@ def get_team_next_game(team_abbrev):
 # -------------------------------------------------
 # Defense vs Position scrape (HashtagBasketball)
 # -------------------------------------------------
-@st.cache_data(ttl=86400)
+@_safe_cache_data(ttl=86400)
 def scrape_defense_vs_position():
     """
     Scrape defensive rankings vs position from HashtagBasketball.
