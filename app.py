@@ -1928,6 +1928,14 @@ No game is selected yet — choose one in the sidebar to start.
         # Check if timed out
         if not result_container['done']:
             progress_container.warning("⚠️ Request is taking longer than expected. Loading with available data...")
+            # Check if we got partial data before timeout
+            partial_data = result_container.get('data')
+            roster_errors = []
+            if partial_data and isinstance(partial_data, dict):
+                roster_errors = partial_data.get('_roster_errors', [])
+            if not roster_errors:
+                roster_errors = [f"Request timed out after 150 seconds"]
+            
             game_data = {
                 'home_team': home_team,
                 'away_team': away_team,
@@ -1942,6 +1950,7 @@ No game is selected yet — choose one in the sidebar to start.
                 'def_vs_pos_df': [],
                 'team_stats': [],
                 '_cache_status': 'TIMEOUT',
+                '_roster_errors': roster_errors,
             }
         elif result_container['error']:
             error_obj = result_container['error']
