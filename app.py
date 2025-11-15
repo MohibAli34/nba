@@ -1880,7 +1880,7 @@ No game is selected yet — choose one in the sidebar to start.
         
         def load_data():
             try:
-                progress_container.info("🔄 Step 1/5: Checking cache...")
+                # NO Streamlit calls in this thread - Streamlit doesn't work in threads!
                 result = get_cached_game_data(
                     home_team=home_team,
                     away_team=away_team,

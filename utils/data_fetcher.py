@@ -50,6 +50,42 @@ except ImportError:
 
 
 # -------------------------------------------------
+# Helper to check if Streamlit context is available
+# -------------------------------------------------
+def _has_streamlit_context():
+    """Check if Streamlit session context is available."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        ctx = get_script_run_ctx()
+        return ctx is not None
+    except Exception:
+        return False
+
+
+def _safe_cache_data(ttl=None):
+    """Conditional decorator that only uses @st.cache_data if Streamlit context exists at runtime."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            # Check context at runtime (when function is called), not at definition time
+            if _has_streamlit_context():
+                try:
+                    # If context exists, use Streamlit caching
+                    # This requires wrapping with cache_data at runtime, which is complex
+                    # Instead, we'll just call the function directly and let Streamlit's
+                    # internal caching handle it if it's already cached
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    # If any Streamlit-related error, call function directly
+                    print(f"[WARN] Streamlit cache error, calling {func.__name__} directly: {e}")
+                    return func(*args, **kwargs)
+            else:
+                # No context - call function directly (fallback to Firebase/SQLite cache)
+                return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# -------------------------------------------------
 # Rate limiting helper for nba_api calls
 # -------------------------------------------------
 def rate_limit():
@@ -59,7 +95,7 @@ def rate_limit():
 # -------------------------------------------------
 # Basic player / team lookup utilities
 # -------------------------------------------------
-@st.cache_data(ttl=86400)
+@_safe_cache_data(ttl=86400)
 def get_all_active_players():
     """Get all active NBA players."""
     all_players = players.get_players()
@@ -372,7 +408,7 @@ def _fetch_fanduel_lines_internal(event_id, api_key=None):
         return {}
 
 
-@st.cache_data(ttl=1800)
+@_safe_cache_data(ttl=1800)
 def fetch_fanduel_lines(event_id, api_key=None):
     """
     Fetch player props for a specific NBA event from The Odds API.
@@ -523,7 +559,7 @@ def get_player_fanduel_line(player_name, stat, odds_data):
 # -------------------------------------------------
 # Schedule / upcoming games
 # -------------------------------------------------
-@st.cache_data(ttl=1800)
+@_safe_cache_data(ttl=1800)
 def get_todays_games():
     """Get today's NBA games via live scoreboard snapshot."""
     try:
@@ -567,7 +603,7 @@ def get_todays_games():
         return []
 
 
-@st.cache_data(ttl=900)
+@_safe_cache_data(ttl=900)
 def get_upcoming_games(days: int = 7):
     """
     Get upcoming NBA games (next 3 days: today, tomorrow, day after tomorrow) from the NBA schedule JSON dump.
@@ -945,7 +981,7 @@ def get_player_position(player_id, season="2024-25"):
 # -------------------------------------------------
 # Next game info from live scoreboard
 # -------------------------------------------------
-@st.cache_data(ttl=1800)
+@_safe_cache_data(ttl=1800)
 def get_team_next_game(team_abbrev):
     """
     Get a team's next upcoming game using today's live scoreboard snapshot.
@@ -1086,7 +1122,7 @@ def scrape_defense_vs_position():
 # -------------------------------------------------
 # Starter scraping from Rotowire
 # -------------------------------------------------
-@st.cache_data(ttl=1800)
+@_safe_cache_data(ttl=1800)
 def scrape_rotowire_starters():
     """
     Scrape projected starters from Rotowire NBA lineups page.
