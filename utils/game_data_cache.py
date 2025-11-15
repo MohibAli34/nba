@@ -199,16 +199,53 @@ def get_cached_game_data(
     # Cache miss or stale - fetch from API
     print(f"[GAME_CACHE] [REFRESH] Cache MISS/STALE for {cache_key}, fetching from API...")
     import time
+    import signal
+    import threading
     start_time = time.time()
     
-    # Always fetch from API - function has error handling built in
-    try:
-        fresh_data = fetch_game_data_internal(home_team, away_team, cur_season, prev_season, game_date)
-        fetch_time = time.time() - start_time
-        print(f"[GAME_CACHE] [TIME] API fetch completed in {fetch_time:.2f} seconds")
-    except Exception as e:
-        print(f"[GAME_CACHE] [ERROR] API fetch failed: {e}. Returning empty data structure.")
-        # Return minimal data structure so app doesn't crash
+    # Add timeout mechanism (2 minutes max)
+    MAX_FETCH_TIMEOUT = 120  # 2 minutes
+    result_container = {'data': None, 'exception': None, 'completed': False}
+    
+    def fetch_with_progress():
+        try:
+            print("[INFO] Starting data fetch...")
+            result_container['data'] = fetch_game_data_internal(home_team, away_team, cur_season, prev_season, game_date)
+            result_container['completed'] = True
+            print(f"[INFO] Data fetch completed in {time.time() - start_time:.1f}s")
+        except Exception as e:
+            result_container['exception'] = e
+            result_container['completed'] = True
+            print(f"[ERROR] Data fetch failed: {e}")
+    
+    # Start fetch in thread
+    fetch_thread = threading.Thread(target=fetch_with_progress, daemon=True)
+    fetch_thread.start()
+    fetch_thread.join(timeout=MAX_FETCH_TIMEOUT)
+    
+    fetch_time = time.time() - start_time
+    
+    # Check if thread is still running (timed out)
+    if fetch_thread.is_alive():
+        print(f"[ERROR] API fetch timed out after {MAX_FETCH_TIMEOUT}s. Returning partial data.")
+        # Return minimal data structure
+        fresh_data = {
+            'home_team': home_team,
+            'away_team': away_team,
+            'game_date': game_date,
+            'cur_season': cur_season,
+            'prev_season': prev_season,
+            'home_roster': [],
+            'away_roster': [],
+            'starters_dict': {},
+            'event_id': None,
+            'odds_data': {},
+            'def_vs_pos_df': [],
+            'team_stats': [],
+            '_timeout': True,
+        }
+    elif result_container['exception']:
+        print(f"[GAME_CACHE] [ERROR] API fetch failed: {result_container['exception']}. Returning empty data structure.")
         fresh_data = {
             'home_team': home_team,
             'away_team': away_team,
@@ -223,7 +260,9 @@ def get_cached_game_data(
             'def_vs_pos_df': [],
             'team_stats': [],
         }
-        fetch_time = time.time() - start_time
+    else:
+        fresh_data = result_container['data']
+        print(f"[GAME_CACHE] [TIME] API fetch completed in {fetch_time:.2f} seconds")
     
     # Store in cache (if we got data)
     if fresh_data:

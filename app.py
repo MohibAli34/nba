@@ -1866,17 +1866,99 @@ No game is selected yet — choose one in the sidebar to start.
         st.info("🔄 Checking cache for game data...")
     
     # Always try to load data - error handling is built into the functions
+    # Add timeout wrapper with progress updates
     try:
-        # Use st.spinner to show progress and prevent hanging
-        with st.spinner("Loading game data... This may take a minute on first load."):
-            game_data = get_cached_game_data(
-                home_team=home_team,
-                away_team=away_team,
-                cur_season=cur_season,
-                prev_season=prev_season,
-                game_date=game_date,
-                max_age_hours=24
-            )
+        import time
+        import threading
+        
+        progress_container = st.empty()
+        result_container = {'data': None, 'done': False, 'error': None}
+        
+        def load_data():
+            try:
+                progress_container.info("🔄 Step 1/5: Checking cache...")
+                result = get_cached_game_data(
+                    home_team=home_team,
+                    away_team=away_team,
+                    cur_season=cur_season,
+                    prev_season=prev_season,
+                    game_date=game_date,
+                    max_age_hours=24
+                )
+                result_container['data'] = result
+            except Exception as e:
+                result_container['error'] = e
+            finally:
+                result_container['done'] = True
+        
+        # Start loading in thread
+        load_thread = threading.Thread(target=load_data, daemon=True)
+        load_thread.start()
+        
+        # Show progress updates every 5 seconds
+        start_time = time.time()
+        timeout_seconds = 150  # 2.5 minutes max
+        progress_messages = [
+            ("🔄 Checking cache...", 5),
+            ("📊 Fetching rosters...", 15),
+            ("🏀 Getting player data...", 30),
+            ("⚽ Loading game stats...", 60),
+            ("⏳ Still loading... This may take up to 2 minutes", 90),
+            ("⚠️ Taking longer than expected...", 120),
+        ]
+        
+        message_idx = 0
+        while not result_container['done'] and (time.time() - start_time) < timeout_seconds:
+            elapsed = time.time() - start_time
+            
+            # Update progress message
+            if message_idx < len(progress_messages):
+                threshold, next_idx = progress_messages[message_idx]
+                if elapsed >= threshold:
+                    progress_container.info(threshold)
+                    message_idx += 1
+            
+            time.sleep(1)
+            load_thread.join(timeout=1)
+        
+        # Check if timed out
+        if not result_container['done']:
+            progress_container.warning("⚠️ Request is taking longer than expected. Loading with available data...")
+            game_data = {
+                'home_team': home_team,
+                'away_team': away_team,
+                'game_date': game_date,
+                'cur_season': cur_season,
+                'prev_season': prev_season,
+                'home_roster': [],
+                'away_roster': [],
+                'starters_dict': {},
+                'event_id': None,
+                'odds_data': {},
+                'def_vs_pos_df': [],
+                'team_stats': [],
+                '_cache_status': 'TIMEOUT',
+            }
+        elif result_container['error']:
+            progress_container.error(f"❌ Error: {result_container['error']}")
+            game_data = {
+                'home_team': home_team,
+                'away_team': away_team,
+                'game_date': game_date,
+                'cur_season': cur_season,
+                'prev_season': prev_season,
+                'home_roster': [],
+                'away_roster': [],
+                'starters_dict': {},
+                'event_id': None,
+                'odds_data': {},
+                'def_vs_pos_df': [],
+                'team_stats': [],
+                '_cache_status': 'ERROR',
+            }
+        else:
+            game_data = result_container['data']
+            progress_container.empty()  # Clear progress message
     except Exception as e:
         print(f"[ERROR] Unexpected error in get_cached_game_data: {e}")
         import traceback
