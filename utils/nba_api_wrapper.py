@@ -83,9 +83,9 @@ def configure_nba_api():
 def safe_request_with_retries(
     request_func: Callable,
     url: str = "",
-    max_retries: int = 3,
-    base_delay: float = 1.5,
-    timeout: float = 30.0
+    max_retries: int = 5,  # Increased from 3 to 5
+    base_delay: float = 2.0,  # Start with 2s instead of 1.5s
+    timeout: float = 60.0  # Increased from 30 to 60 seconds
 ) -> Optional[requests.Response]:
     """
     Execute a request function with retries and exponential backoff.
@@ -142,7 +142,8 @@ def safe_request_with_retries(
 def safe_nba_api_call(
     api_call_class,
     *args,
-    max_retries: int = 3,
+    max_retries: int = 5,  # Increased from 3 to 5
+    timeout: float = 60.0,  # Increased from 30 to 60 seconds
     **kwargs
 ) -> Optional[Any]:
     """
