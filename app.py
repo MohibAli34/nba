@@ -2039,12 +2039,13 @@ No game is selected yet — choose one in the sidebar to start.
 
     if home_roster.empty and away_roster.empty:
         st.warning("⚠️ Couldn't load rosters for this matchup. The app will continue but may have limited functionality.")
-        # Create empty roster so app doesn't crash
+        # Create empty roster with all required columns
         combined_roster = pd.DataFrame(columns=["player_id", "full_name", "team_abbrev", "is_starter"])
     else:
         try:
             combined_roster = pd.concat([home_roster, away_roster], ignore_index=True)
-            combined_roster = combined_roster.drop_duplicates(subset=["player_id"])
+            if not combined_roster.empty and "player_id" in combined_roster.columns:
+                combined_roster = combined_roster.drop_duplicates(subset=["player_id"])
         except Exception as e:
             print(f"[ERROR] Failed to combine rosters: {e}")
             st.warning("⚠️ Error combining rosters. Using available data.")
@@ -2052,39 +2053,79 @@ No game is selected yet — choose one in the sidebar to start.
             if combined_roster.empty:
                 combined_roster = pd.DataFrame(columns=["player_id", "full_name", "team_abbrev", "is_starter"])
 
-    # Mark starters with error handling
-    try:
-        if "full_name" in combined_roster.columns:
+    # Ensure we have required columns even if rosters are empty
+    required_columns = ["player_id", "full_name", "team_abbrev", "is_starter"]
+    for col in required_columns:
+        if col not in combined_roster.columns:
+            combined_roster[col] = None if col != "is_starter" else False
+
+    # Mark starters with error handling - only if we have players
+    if not combined_roster.empty and "full_name" in combined_roster.columns:
+        try:
             combined_roster["is_starter"] = combined_roster["full_name"].apply(
                 lambda name: is_player_starter(name, starters_dict) if pd.notna(name) else False
             )
-        else:
+        except Exception as e:
+            print(f"[WARN] Failed to mark starters: {e}")
             combined_roster["is_starter"] = False
-    except Exception as e:
-        print(f"[WARN] Failed to mark starters: {e}")
-        combined_roster["is_starter"] = False
+    else:
+        # Empty roster or missing column - set default
+        if "is_starter" not in combined_roster.columns:
+            combined_roster["is_starter"] = False
     
-    # Filter to only starters if toggle is on
-    if show_only_starters:
-        combined_roster = combined_roster[combined_roster["is_starter"] == True].copy()
-        if combined_roster.empty:
-            st.warning("⚠️ No projected starters found for this matchup. Showing all players.")
-            combined_roster = pd.concat([home_roster, away_roster], ignore_index=True)
-            combined_roster = combined_roster.drop_duplicates(subset=["player_id"])
-            combined_roster["is_starter"] = combined_roster["full_name"].apply(
-                lambda name: is_player_starter(name, starters_dict)
-            )
+    # Filter to only starters if toggle is on - only if we have players
+    if show_only_starters and not combined_roster.empty and "is_starter" in combined_roster.columns:
+        try:
+            combined_roster = combined_roster[combined_roster["is_starter"] == True].copy()
+            if combined_roster.empty:
+                st.warning("⚠️ No projected starters found for this matchup. Showing all players.")
+                # Try to restore from original rosters
+                try:
+                    if not home_roster.empty or not away_roster.empty:
+                        combined_roster = pd.concat([home_roster, away_roster], ignore_index=True)
+                        if "player_id" in combined_roster.columns:
+                            combined_roster = combined_roster.drop_duplicates(subset=["player_id"])
+                        if "full_name" in combined_roster.columns:
+                            combined_roster["is_starter"] = combined_roster["full_name"].apply(
+                                lambda name: is_player_starter(name, starters_dict) if pd.notna(name) else False
+                            )
+                        else:
+                            combined_roster["is_starter"] = False
+                except Exception as e:
+                    print(f"[WARN] Failed to restore rosters: {e}")
+                    combined_roster = pd.DataFrame(columns=required_columns)
+        except Exception as e:
+            print(f"[WARN] Failed to filter starters: {e}")
 
-    # Filter by player search query (case-insensitive)
-    if player_search_query:
-        search_lower = player_search_query.lower()
-        combined_roster = combined_roster[
-            combined_roster["full_name"].str.lower().str.contains(search_lower, na=False)
-        ].copy()
-        if combined_roster.empty:
-            st.info(f"🔍 No players found matching '{player_search_query}'. Try a different search term.")
+    # Filter by player search query (case-insensitive) - only if we have players
+    if player_search_query and not combined_roster.empty and "full_name" in combined_roster.columns:
+        try:
+            search_lower = player_search_query.lower()
+            combined_roster = combined_roster[
+                combined_roster["full_name"].str.lower().str.contains(search_lower, na=False)
+            ].copy()
+            if combined_roster.empty:
+                st.info(f"🔍 No players found matching '{player_search_query}'. Try a different search term.")
+        except Exception as e:
+            print(f"[WARN] Failed to filter by search query: {e}")
 
     total_players = len(combined_roster)
+    
+    # Early return if no players - show helpful message
+    if total_players == 0:
+        st.error("❌ No player data available for this matchup.")
+        st.info("💡 This might be because:")
+        st.markdown("""
+        - APIs are temporarily unavailable
+        - Game data hasn't been loaded yet
+        - Network issues preventing data fetch
+        
+        **Try:**
+        - Refreshing the page
+        - Checking Streamlit Cloud logs
+        - Trying a different game
+        """)
+        return
 
     # Placeholders for data lists
     table_rows = []
