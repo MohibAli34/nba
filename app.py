@@ -1905,15 +1905,18 @@ No game is selected yet — choose one in the sidebar to start.
         
         # Show progress updates every 5 seconds
         start_time = time.time()
-        timeout_seconds = 300  # 5 minutes max for slow NBA API
+        timeout_seconds = 900  # 15 minutes max for very slow NBA API (multiple sequential calls)
         progress_messages = [
             ("🔄 Checking cache...", 5),
             ("📊 Fetching rosters...", 15),
             ("🏀 Getting player data...", 30),
             ("⚽ Loading game stats...", 60),
-            ("⏳ Still loading... This may take up to 5 minutes", 120),
+            ("⏳ Still loading... This may take up to 15 minutes", 120),
             ("⚠️ Taking longer than expected...", 180),
             ("🕐 API is slow but still loading...", 240),
+            ("⏰ Still waiting for API...", 300),
+            ("🔄 API is very slow, but we're still trying...", 420),
+            ("💪 Hang in there, API is responding slowly...", 600),
         ]
         
         message_idx = 0
