@@ -42,6 +42,16 @@ def initialize_firebase():
     if not FIREBASE_AVAILABLE:
         return False
     
+    # Check if Firebase app already exists (from previous initialization)
+    try:
+        _firebase_app = firebase_admin.get_app()
+        _db = firestore.client()
+        print("[INFO] Firebase app already exists, reusing existing instance")
+        return True
+    except ValueError:
+        # No app exists yet, continue to initialize
+        pass
+    
     if _firebase_app is not None:
         return True
     
@@ -61,7 +71,28 @@ def initialize_firebase():
             except json.JSONDecodeError as e:
                 print(f"[WARN] Failed to parse FIREBASE_CREDENTIALS_JSON: {e}")
                 # Fall through to try file path
+            except ValueError as e:
+                # App already exists - try to get it
+                if "already exists" in str(e).lower():
+                    try:
+                        _firebase_app = firebase_admin.get_app()
+                        _db = firestore.client()
+                        print("[INFO] Firebase app already exists, reusing existing instance")
+                        return True
+                    except Exception:
+                        pass
+                print(f"[WARN] Failed to initialize Firebase from JSON: {e}")
+                # Fall through to try file path
             except Exception as e:
+                # Check if it's the "already exists" error
+                if "already exists" in str(e).lower():
+                    try:
+                        _firebase_app = firebase_admin.get_app()
+                        _db = firestore.client()
+                        print("[INFO] Firebase app already exists, reusing existing instance")
+                        return True
+                    except Exception:
+                        pass
                 print(f"[WARN] Failed to initialize Firebase from JSON: {e}")
                 # Fall through to try file path
         
@@ -72,17 +103,38 @@ def initialize_firebase():
         )
         
         if os.path.exists(cred_path):
-            cred = credentials.Certificate(cred_path)
-            _firebase_app = firebase_admin.initialize_app(cred)
-            _db = firestore.client()
-            print("[INFO] Firebase initialized successfully from file")
-            return True
+            try:
+                cred = credentials.Certificate(cred_path)
+                _firebase_app = firebase_admin.initialize_app(cred)
+                _db = firestore.client()
+                print("[INFO] Firebase initialized successfully from file")
+                return True
+            except ValueError as e:
+                # App already exists - try to get it
+                if "already exists" in str(e).lower():
+                    try:
+                        _firebase_app = firebase_admin.get_app()
+                        _db = firestore.client()
+                        print("[INFO] Firebase app already exists, reusing existing instance")
+                        return True
+                    except Exception:
+                        pass
+                raise
         else:
             print(f"[WARN] Firebase credentials file not found at: {cred_path}")
             print(f"[WARN] Firebase will not be available. Set FIREBASE_CREDENTIALS_JSON environment variable for Streamlit Cloud.")
             return False
             
     except Exception as e:
+        # Final check if app already exists
+        if "already exists" in str(e).lower():
+            try:
+                _firebase_app = firebase_admin.get_app()
+                _db = firestore.client()
+                print("[INFO] Firebase app already exists, reusing existing instance")
+                return True
+            except Exception:
+                pass
         print(f"[WARN] Failed to initialize Firebase: {e}")
         print(f"[WARN] App will continue without Firebase caching.")
         return False
