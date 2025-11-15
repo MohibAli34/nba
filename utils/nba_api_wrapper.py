@@ -152,7 +152,7 @@ def safe_nba_api_call(
     api_call_class,
     *args,
     max_retries: int = 5,  # Increased from 3 to 5
-    timeout: float = 180.0,  # 3 minutes timeout for slow API
+    timeout: float = 600.0,  # 10 minutes timeout per API request for very slow API
     **kwargs
 ) -> Optional[Any]:
     """
