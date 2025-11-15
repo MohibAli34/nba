@@ -59,7 +59,7 @@ def configure_nba_api():
         if hasattr(nba_http, 'NBAHTTP'):
             original_request = nba_http.NBAHTTP.request
             
-            def patched_request(self, url, headers=None, timeout=180, **kwargs):  # 3 minutes default timeout
+            def patched_request(self, url, headers=None, timeout=300, **kwargs):  # 5 minutes default timeout
                 """Patched request method with proper headers and extended timeout."""
                 # Merge our headers with any provided headers
                 merged_headers = NBA_HEADERS.copy()
@@ -94,7 +94,7 @@ def safe_request_with_retries(
     url: str = "",
     max_retries: int = 5,  # Increased from 3 to 5
     base_delay: float = 2.0,  # Start with 2s instead of 1.5s
-    timeout: float = 180.0  # 3 minutes timeout for slow API
+    timeout: float = 300.0  # 5 minutes timeout for slow API
 ) -> Optional[requests.Response]:
     """
     Execute a request function with retries and exponential backoff.

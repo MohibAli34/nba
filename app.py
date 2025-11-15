@@ -1905,14 +1905,15 @@ No game is selected yet — choose one in the sidebar to start.
         
         # Show progress updates every 5 seconds
         start_time = time.time()
-        timeout_seconds = 150  # 2.5 minutes max
+        timeout_seconds = 300  # 5 minutes max for slow NBA API
         progress_messages = [
             ("🔄 Checking cache...", 5),
             ("📊 Fetching rosters...", 15),
             ("🏀 Getting player data...", 30),
             ("⚽ Loading game stats...", 60),
-            ("⏳ Still loading... This may take up to 2 minutes", 90),
-            ("⚠️ Taking longer than expected...", 120),
+            ("⏳ Still loading... This may take up to 5 minutes", 120),
+            ("⚠️ Taking longer than expected...", 180),
+            ("🕐 API is slow but still loading...", 240),
         ]
         
         message_idx = 0
@@ -1939,7 +1940,7 @@ No game is selected yet — choose one in the sidebar to start.
             if partial_data and isinstance(partial_data, dict):
                 roster_errors = partial_data.get('_roster_errors', [])
             if not roster_errors:
-                roster_errors = [f"Request timed out after 150 seconds"]
+                roster_errors = [f"Request timed out after {timeout_seconds} seconds"]
             
             game_data = {
                 'home_team': home_team,

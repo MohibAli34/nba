@@ -264,7 +264,7 @@ def get_cached_game_data(
             import threading
             import time
             
-            roster_refresh_timeout = 180  # 3 minutes max to refresh rosters
+            roster_refresh_timeout = 300  # 5 minutes max to refresh rosters
             roster_container = {'home': None, 'away': None, 'done': False}
             
             def fetch_rosters_with_timeout():
@@ -387,8 +387,8 @@ def get_cached_game_data(
     import threading
     start_time = time.time()
     
-    # Add timeout mechanism (3 minutes max)
-    MAX_FETCH_TIMEOUT = 180  # 3 minutes
+    # Add timeout mechanism (5 minutes max)
+    MAX_FETCH_TIMEOUT = 300  # 5 minutes for slow NBA API
     result_container = {'data': None, 'exception': None, 'completed': False}
     
     def fetch_with_progress():
