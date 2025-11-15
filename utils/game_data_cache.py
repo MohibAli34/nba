@@ -534,11 +534,11 @@ def _restore_dataframes(data: Dict[str, Any]) -> Dict[str, Any]:
     """Convert dict records back to DataFrames."""
     restored_data = data.copy()
     
-    # Convert dict records back to DataFrames
+    # Convert dict records back to DataFrames (avoid DataFrame truth ambiguity)
     if 'home_roster' in restored_data and isinstance(restored_data['home_roster'], list):
-        restored_data['home_roster'] = pd.DataFrame(restored_data['home_roster']) if restored_data['home_roster'] else pd.DataFrame()
+        restored_data['home_roster'] = pd.DataFrame(restored_data['home_roster']) if len(restored_data['home_roster']) > 0 else pd.DataFrame()
     if 'away_roster' in restored_data and isinstance(restored_data['away_roster'], list):
-        restored_data['away_roster'] = pd.DataFrame(restored_data['away_roster']) if restored_data['away_roster'] else pd.DataFrame()
+        restored_data['away_roster'] = pd.DataFrame(restored_data['away_roster']) if len(restored_data['away_roster']) > 0 else pd.DataFrame()
     if 'def_vs_pos_df' in restored_data and isinstance(restored_data['def_vs_pos_df'], list):
         restored_data['def_vs_pos_df'] = pd.DataFrame(restored_data['def_vs_pos_df']) if restored_data['def_vs_pos_df'] else pd.DataFrame()
     if 'team_stats' in restored_data and isinstance(restored_data['team_stats'], list):
