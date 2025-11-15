@@ -1944,7 +1944,19 @@ No game is selected yet — choose one in the sidebar to start.
                 '_cache_status': 'TIMEOUT',
             }
         elif result_container['error']:
-            progress_container.error(f"❌ Error: {result_container['error']}")
+            error_obj = result_container['error']
+            progress_container.error(f"❌ Error: {error_obj}")
+            
+            # Try to extract roster errors from error object if it's a dict-like structure
+            roster_errors = []
+            if isinstance(error_obj, dict):
+                roster_errors = error_obj.get('_roster_errors', [])
+            elif hasattr(error_obj, '_roster_errors'):
+                roster_errors = error_obj._roster_errors
+            elif isinstance(error_obj, Exception):
+                # If it's an exception, include the error message
+                roster_errors = [f"Error during data fetch: {str(error_obj)}"]
+            
             game_data = {
                 'home_team': home_team,
                 'away_team': away_team,
@@ -1959,6 +1971,7 @@ No game is selected yet — choose one in the sidebar to start.
                 'def_vs_pos_df': [],
                 'team_stats': [],
                 '_cache_status': 'ERROR',
+                '_roster_errors': roster_errors if roster_errors else ['Unknown error occurred during data fetch'],
             }
         else:
             game_data = result_container['data']
@@ -1982,6 +1995,7 @@ No game is selected yet — choose one in the sidebar to start.
             'def_vs_pos_df': [],
             'team_stats': [],
             '_cache_status': 'ERROR',
+            '_roster_errors': [f"Unexpected error: {str(e)}"],
         }
         cache_status_placeholder.warning("⚠️ Some data failed to load, but continuing with available data.")
     
@@ -2001,6 +2015,7 @@ No game is selected yet — choose one in the sidebar to start.
             'def_vs_pos_df': [],
             'team_stats': [],
             '_cache_status': 'EMPTY',
+            '_roster_errors': ['No game data returned from fetch function'],
         }
     
     # Show cache status to user with detailed error info

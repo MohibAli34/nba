@@ -258,7 +258,15 @@ def get_cached_game_data(
     # Check if thread is still running (timed out)
     if fetch_thread.is_alive():
         print(f"[ERROR] API fetch timed out after {MAX_FETCH_TIMEOUT}s. Returning partial data.")
-        # Return minimal data structure
+        # Check if we got any partial data before timeout
+        partial_data = result_container.get('data')
+        roster_errors = []
+        if partial_data and isinstance(partial_data, dict):
+            roster_errors = partial_data.get('_roster_errors', [])
+        if not roster_errors:
+            roster_errors = [f"API fetch timed out after {MAX_FETCH_TIMEOUT} seconds"]
+        
+        # Return minimal data structure with any errors we captured
         fresh_data = {
             'home_team': home_team,
             'away_team': away_team,
@@ -272,10 +280,25 @@ def get_cached_game_data(
             'odds_data': {},
             'def_vs_pos_df': [],
             'team_stats': [],
+            '_cache_status': 'TIMEOUT',
+            '_cache_key': cache_key,
+            '_fetch_time': fetch_time,
             '_timeout': True,
+            '_roster_errors': roster_errors,
         }
     elif result_container['exception']:
-        print(f"[GAME_CACHE] [ERROR] API fetch failed: {result_container['exception']}. Returning empty data structure.")
+        exception = result_container['exception']
+        print(f"[GAME_CACHE] [ERROR] API fetch failed: {exception}. Returning error data structure.")
+        # Check if we got any partial data before exception
+        partial_data = result_container.get('data')
+        roster_errors = []
+        if partial_data and isinstance(partial_data, dict):
+            roster_errors = partial_data.get('_roster_errors', [])
+        
+        # Include exception message in roster_errors if no other errors
+        if not roster_errors:
+            roster_errors = [f"Exception during data fetch: {str(exception)}"]
+        
         fresh_data = {
             'home_team': home_team,
             'away_team': away_team,
@@ -289,10 +312,35 @@ def get_cached_game_data(
             'odds_data': {},
             'def_vs_pos_df': [],
             'team_stats': [],
+            '_cache_status': 'ERROR',
+            '_cache_key': cache_key,
+            '_fetch_time': fetch_time,
+            '_roster_errors': roster_errors,
         }
     else:
         fresh_data = result_container['data']
-        print(f"[GAME_CACHE] [TIME] API fetch completed in {fetch_time:.2f} seconds")
+        if not fresh_data:
+            # If data is None/empty, create minimal error structure
+            fresh_data = {
+                'home_team': home_team,
+                'away_team': away_team,
+                'game_date': game_date,
+                'cur_season': cur_season,
+                'prev_season': prev_season,
+                'home_roster': [],
+                'away_roster': [],
+                'starters_dict': {},
+                'event_id': None,
+                'odds_data': {},
+                'def_vs_pos_df': [],
+                'team_stats': [],
+                '_cache_status': 'ERROR',
+                '_cache_key': cache_key,
+                '_fetch_time': fetch_time,
+                '_roster_errors': ['API fetch returned no data'],
+            }
+        else:
+            print(f"[GAME_CACHE] [TIME] API fetch completed in {fetch_time:.2f} seconds")
     
     # Store in cache (if we got data)
     if fresh_data:
