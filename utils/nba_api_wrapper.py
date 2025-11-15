@@ -53,7 +53,11 @@ def configure_nba_api():
     """
     try:
         # Try to patch the HTTP layer
-        import nba_api.library.http as nba_http
+        try:
+            import nba_api.library.http as nba_http
+        except ImportError:
+            # nba_api not installed or different structure
+            raise ImportError("nba_api library not available")
         
         # Store original request method
         if hasattr(nba_http, 'NBAHTTP'):
