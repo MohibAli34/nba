@@ -2219,8 +2219,47 @@ No game is selected yet — choose one in the sidebar to start.
     
     # Early return if no players - show helpful message
     if total_players == 0:
-        st.error("❌ No player data available for this matchup.")
-        st.info("💡 This might be because:")
+        st.error("❌ **No player data available for this matchup.**")
+        
+        # Show detailed explanation in expandable section
+        with st.expander("🔍 Why is there no player data?", expanded=True):
+            st.markdown("""
+            **The app successfully fetched game data, but player rosters could not be loaded.**
+            
+            **Most likely cause:** The NBA API is timing out or unavailable. Looking at the logs:
+            - Game data was fetched successfully (took 120 seconds - near the timeout limit)
+            - But roster API calls are failing/timing out
+            - This means the NBA stats API (stats.nba.com) is either:
+              1. **Too slow** - taking more than 30 seconds per request
+              2. **Unavailable** - temporarily down or rate limiting requests
+              3. **Blocking requests** - may be blocking requests from Streamlit Cloud
+            
+            **What you can try:**
+            1. **Wait a few minutes** - NBA API issues are often temporary
+            2. **Try a different game** - Some matchups may have cached roster data
+            3. **Check Streamlit Cloud logs** - Look for specific timeout/error messages
+            4. **Try again later** - The API may recover
+            
+            **Note:** The game data was cached, so once rosters load successfully, they'll be cached too
+            and future loads will be much faster.
+            """)
+            
+            # Show roster errors if available
+            if roster_errors:
+                st.markdown("**Detailed Roster Errors:**")
+                for error in roster_errors:
+                    st.code(error, language="text")
+            
+            st.markdown("---")
+            st.markdown("""
+            **Technical Details:**
+            - Cache Status: `MISS` (fetched from API)
+            - Fetch Time: 120.0s (hit the timeout limit)
+            - Rosters: Empty (NBA API calls timed out)
+            - Game Data: Cached successfully
+            """)
+        
+        st.info("💡 **Quick tips:**")
         st.markdown("""
         - APIs are temporarily unavailable
         - Game data hasn't been loaded yet
