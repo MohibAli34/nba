@@ -252,8 +252,9 @@ def get_cached_game_data(
                                 home_roster_new = get_players_by_team(home_team, season=prev_season)
                             if not home_roster_new.empty:
                                 home_roster_new["team_abbrev"] = home_team
-                                roster_container['home'] = home_roster_new.to_dict('records')
-                                cached_data['home_roster'] = roster_container['home']
+                                roster_dict = home_roster_new.to_dict('records')
+                                roster_container['home'] = roster_dict
+                                cached_data['home_roster'] = roster_dict  # Update immediately
                                 print(f"[GAME_CACHE] [SUCCESS] Refreshed {home_team} roster with {len(home_roster_new)} players")
                         except Exception as e:
                             print(f"[GAME_CACHE] [WARN] Failed to refresh {home_team} roster: {e}")
@@ -267,8 +268,9 @@ def get_cached_game_data(
                                 away_roster_new = get_players_by_team(away_team, season=prev_season)
                             if not away_roster_new.empty:
                                 away_roster_new["team_abbrev"] = away_team
-                                roster_container['away'] = away_roster_new.to_dict('records')
-                                cached_data['away_roster'] = roster_container['away']
+                                roster_dict = away_roster_new.to_dict('records')
+                                roster_container['away'] = roster_dict
+                                cached_data['away_roster'] = roster_dict  # Update immediately
                                 print(f"[GAME_CACHE] [SUCCESS] Refreshed {away_team} roster with {len(away_roster_new)} players")
                         except Exception as e:
                             print(f"[GAME_CACHE] [WARN] Failed to refresh {away_team} roster: {e}")
@@ -282,8 +284,20 @@ def get_cached_game_data(
             refresh_thread.start()
             refresh_thread.join(timeout=roster_refresh_timeout)
             
-            # Update cache if we got any rosters
-            if roster_container['home'] or roster_container['away']:
+            # Check if we got any rosters back
+            refreshed_home = roster_container.get('home')
+            refreshed_away = roster_container.get('away')
+            
+            # Update cached_data with refreshed rosters if we got them
+            if refreshed_home:
+                cached_data['home_roster'] = refreshed_home
+                print(f"[GAME_CACHE] [SUCCESS] Using refreshed {home_team} roster")
+            if refreshed_away:
+                cached_data['away_roster'] = refreshed_away
+                print(f"[GAME_CACHE] [SUCCESS] Using refreshed {away_team} roster")
+            
+            # Update cache if we got any rosters (for next time)
+            if refreshed_home or refreshed_away:
                 try:
                     serializable_data = _prepare_for_storage(cached_data)
                     firebase_cache.set_cached_data(cache_key, serializable_data)
@@ -293,6 +307,17 @@ def get_cached_game_data(
             
             if not roster_container['done']:
                 print(f"[GAME_CACHE] [WARN] Roster refresh timed out after {roster_refresh_timeout}s - continuing with cached data")
+            
+            # Verify rosters are now available
+            final_home = cached_data.get('home_roster', [])
+            final_away = cached_data.get('away_roster', [])
+            final_home_count = len(final_home) if isinstance(final_home, (list, pd.DataFrame)) else (0 if not final_home else len(final_home) if hasattr(final_home, '__len__') else 0)
+            final_away_count = len(final_away) if isinstance(final_away, (list, pd.DataFrame)) else (0 if not final_away else len(final_away) if hasattr(final_away, '__len__') else 0)
+            
+            if final_home_count > 0 or final_away_count > 0:
+                print(f"[GAME_CACHE] [INFO] After refresh: {final_home_count} home players, {final_away_count} away players")
+            else:
+                print(f"[GAME_CACHE] [WARN] After refresh: still no rosters available")
         
         # Add cache status indicator
         cached_data['_cache_status'] = 'HIT'
