@@ -157,29 +157,60 @@ def get_cached_data(cache_key: str, max_age_hours: int = 24, timeout_seconds: fl
         timestamp = data.get('timestamp')
         
         if timestamp:
+            cached_time = None
             # Check if timestamp is a Firestore timestamp
-            if hasattr(timestamp, 'to_datetime'):
-                # Firestore Timestamp object
-                cached_time = timestamp.to_datetime()
-            elif hasattr(timestamp, 'timestamp'):
-                cached_time = datetime.fromtimestamp(timestamp.timestamp())
-            elif isinstance(timestamp, (int, float)):
-                cached_time = datetime.fromtimestamp(timestamp)
-            else:
-                # Try parsing as ISO string
-                try:
-                    cached_time = datetime.fromisoformat(str(timestamp))
-                except:
-                    # If all else fails, assume cache is invalid
-                    print(f"[CACHE] [WARN] Could not parse timestamp for {cache_key}")
-                    return None
+            try:
+                if hasattr(timestamp, 'to_datetime'):
+                    # Firestore Timestamp object
+                    cached_time = timestamp.to_datetime()
+                elif hasattr(timestamp, 'timestamp'):
+                    cached_time = datetime.fromtimestamp(timestamp.timestamp())
+                elif isinstance(timestamp, (int, float)):
+                    cached_time = datetime.fromtimestamp(float(timestamp))
+                else:
+                    # Try parsing as ISO string
+                    try:
+                        cached_time = datetime.fromisoformat(str(timestamp))
+                    except (ValueError, TypeError):
+                        # Try alternative formats
+                        try:
+                            cached_time = datetime.strptime(str(timestamp), "%Y-%m-%dT%H:%M:%S")
+                        except (ValueError, TypeError):
+                            # If all else fails, assume cache is invalid
+                            print(f"[CACHE] [WARN] Could not parse timestamp for {cache_key}: {type(timestamp)} = {timestamp}")
+                            return None
+            except Exception as e:
+                print(f"[CACHE] [WARN] Error parsing timestamp for {cache_key}: {e}")
+                return None
+            
+            # Ensure cached_time is actually a datetime object
+            if not isinstance(cached_time, datetime):
+                print(f"[CACHE] [WARN] cached_time is not a datetime object for {cache_key}: {type(cached_time)}")
+                return None
             
             # Calculate age as timedelta
             try:
-                age = datetime.now() - cached_time
+                now = datetime.now()
+                age = now - cached_time
+                
+                # Verify age is a timedelta
+                if not isinstance(age, timedelta):
+                    print(f"[CACHE] [WARN] age is not a timedelta for {cache_key}: {type(age)}")
+                    return None
+                
                 # Ensure max_age_hours is numeric before creating timedelta
-                max_age_hours_float = float(max_age_hours)
-                max_age = timedelta(hours=max_age_hours_float)
+                try:
+                    max_age_hours_numeric = float(max_age_hours)
+                except (ValueError, TypeError) as e:
+                    print(f"[CACHE] [WARN] Invalid max_age_hours type for {cache_key}: {type(max_age_hours)} = {max_age_hours}")
+                    return None
+                
+                max_age = timedelta(hours=max_age_hours_numeric)
+                
+                # Verify max_age is a timedelta
+                if not isinstance(max_age, timedelta):
+                    print(f"[CACHE] [WARN] max_age is not a timedelta for {cache_key}: {type(max_age)}")
+                    return None
                 
                 if age > max_age:
                     print(f"[CACHE] [CLOCK] Cache EXPIRED for {cache_key} (age: {age}, max: {max_age})")
@@ -191,8 +222,11 @@ def get_cached_data(cache_key: str, max_age_hours: int = 24, timeout_seconds: fl
                 print(f"[CACHE] [OK] Cache HIT for {cache_key} (age: {age}, size: {data_size} chars, fetched in {fetch_time:.3f}s)")
                 return cached_data
             except (TypeError, ValueError) as e:
-                print(f"[CACHE] [WARN] Error comparing cache age for {cache_key}: {e}")
-                print(f"[CACHE] [WARN] cached_time type: {type(cached_time)}, max_age_hours type: {type(max_age_hours)}")
+                print(f"[CACHE] [ERROR] Error comparing cache age for {cache_key}: {e}")
+                print(f"[CACHE] [ERROR] cached_time type: {type(cached_time)}, value: {cached_time}")
+                print(f"[CACHE] [ERROR] max_age_hours type: {type(max_age_hours)}, value: {max_age_hours}")
+                import traceback
+                traceback.print_exc()
                 # If we can't compare, assume cache is invalid
                 return None
         
