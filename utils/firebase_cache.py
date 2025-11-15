@@ -32,7 +32,11 @@ _db = None
 
 
 def initialize_firebase():
-    """Initialize Firebase Admin SDK with service account credentials."""
+    """Initialize Firebase Admin SDK with service account credentials.
+    
+    Supports both file path and JSON string from environment variable.
+    On Streamlit Cloud, use FIREBASE_CREDENTIALS_JSON environment variable.
+    """
     global _firebase_app, _db
     
     if not FIREBASE_AVAILABLE:
@@ -42,23 +46,45 @@ def initialize_firebase():
         return True
     
     try:
-        # Path to service account key file - use environment variable or default
+        # First, try to get credentials from environment variable (Streamlit Cloud secret)
+        firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS_JSON", None)
+        
+        if firebase_creds_json:
+            # Parse JSON string from environment variable
+            try:
+                cred_dict = json.loads(firebase_creds_json)
+                cred = credentials.Certificate(cred_dict)
+                _firebase_app = firebase_admin.initialize_app(cred)
+                _db = firestore.client()
+                print("[INFO] Firebase initialized successfully from environment variable")
+                return True
+            except json.JSONDecodeError as e:
+                print(f"[WARN] Failed to parse FIREBASE_CREDENTIALS_JSON: {e}")
+                # Fall through to try file path
+            except Exception as e:
+                print(f"[WARN] Failed to initialize Firebase from JSON: {e}")
+                # Fall through to try file path
+        
+        # Fallback: Try to load from file path
         cred_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             FIREBASE_CREDENTIALS_FILE
         )
         
-        if not os.path.exists(cred_path):
+        if os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            _firebase_app = firebase_admin.initialize_app(cred)
+            _db = firestore.client()
+            print("[INFO] Firebase initialized successfully from file")
+            return True
+        else:
             print(f"[WARN] Firebase credentials file not found at: {cred_path}")
+            print(f"[WARN] Firebase will not be available. Set FIREBASE_CREDENTIALS_JSON environment variable for Streamlit Cloud.")
             return False
-        
-        cred = credentials.Certificate(cred_path)
-        _firebase_app = firebase_admin.initialize_app(cred)
-        _db = firestore.client()
-        print("[INFO] Firebase initialized successfully")
-        return True
+            
     except Exception as e:
-        print(f"[ERROR] Failed to initialize Firebase: {e}")
+        print(f"[WARN] Failed to initialize Firebase: {e}")
+        print(f"[WARN] App will continue without Firebase caching.")
         return False
 
 

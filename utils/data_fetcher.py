@@ -8,11 +8,17 @@ from bs4 import BeautifulSoup
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables from .env file (if it exists)
+# On Streamlit Cloud, environment variables are set via dashboard
 load_dotenv()
 
 # Get API keys from environment variables
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY", None)
+
+# Warn if API key is missing (but don't crash - allows graceful degradation)
+if not ODDS_API_KEY:
+    print("[WARN] ODDS_API_KEY not found in environment variables.")
+    print("[WARN] Some features (odds API integration) will not be available.")
 
 # Import NBA API wrapper early to configure headers and retries
 try:

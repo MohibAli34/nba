@@ -13,7 +13,8 @@ from datetime import datetime
 from copy import deepcopy
 from dotenv import load_dotenv
 
-# Load environment variables from .env file at startup
+# Load environment variables from .env file at startup (if it exists)
+# On Streamlit Cloud, set environment variables in the dashboard
 load_dotenv()
 
 # make sure we can import from utils/
@@ -2454,6 +2455,13 @@ No game is selected yet — choose one in the sidebar to start.
     # final status
     status_placeholder.success("✅ Done.")
 def main():
+    # Initialize database on startup (creates tables if they don't exist)
+    try:
+        from utils.database import init_database
+        init_database()
+    except Exception as e:
+        print(f"[WARN] Database initialization issue: {e}. App will continue but caching may be limited.")
+    
     # Initialize Firebase cache if available
     try:
         from utils import firebase_cache
