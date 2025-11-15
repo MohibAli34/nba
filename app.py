@@ -2067,6 +2067,14 @@ No game is selected yet — choose one in the sidebar to start.
         cache_status_placeholder.success(f"✅ **Data loaded from cache** (instant) | Key: `{cache_key}`")
     elif cache_status == 'MISS':
         cache_status_placeholder.warning(f"🔄 **Data fetched from API** ({fetch_time:.1f}s) | Saved to cache: `{cache_key}`")
+        # Show roster errors even for MISS status if rosters are empty
+        if roster_errors:
+            with st.expander("⚠️ Roster Loading Issues", expanded=True):
+                st.warning("**Note:** Game data was fetched, but rosters could not be loaded.")
+                st.markdown("**Roster Fetching Errors:**")
+                for error in roster_errors:
+                    st.error(f"• {error}")
+                st.info("💡 The app will continue, but player data may not be available for this matchup.")
     elif cache_status == 'ERROR' or cache_status == 'TIMEOUT' or cache_status == 'EMPTY' or timeout_flag:
         cache_status_placeholder.error(f"❌ **Data load failed** | Status: {cache_status}")
         # Always show error details in an expandable section
