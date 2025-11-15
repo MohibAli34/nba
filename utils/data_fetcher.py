@@ -1251,9 +1251,12 @@ def get_players_by_team(team_abbrev, season="2024-25"):
         team_info = [t for t in all_teams if t["abbreviation"] == team_abbrev]
 
         if not team_info:
-            print(f"[ROSTER] [ERROR] Team abbreviation '{team_abbrev}' not found in NBA teams list")
-            print(f"[ROSTER] [DEBUG] Available teams: {[t['abbreviation'] for t in all_teams[:10]]}...")
-            return pd.DataFrame()
+            available_abbrevs = [t['abbreviation'] for t in all_teams]
+            error_msg = f"Team abbreviation '{team_abbrev}' not found in NBA teams list. Available: {', '.join(available_abbrevs[:15])}..."
+            print(f"[ROSTER] [ERROR] {error_msg}")
+            print(f"[ROSTER] [DEBUG] All available teams: {available_abbrevs}")
+            # Raise exception with detailed message instead of silently returning empty
+            raise ValueError(error_msg)
 
         team_id = team_info[0]["id"]
         team_name = team_info[0]["full_name"]
@@ -1271,20 +1274,26 @@ def get_players_by_team(team_abbrev, season="2024-25"):
                 season=season,
             )
             if roster_obj is None:
-                error_msg = f"API call returned None for {team_abbrev} ({season})"
+                error_msg = f"NBA API call returned None for {team_abbrev} ({season}) - API may be unavailable or rate limited"
                 print(f"[ROSTER] [ERROR] {error_msg}")
-                return pd.DataFrame()
+                raise Exception(error_msg)
             try:
                 df = roster_obj.get_data_frames()[0]
-                print(f"[ROSTER] [API] Got {len(df)} rows from API")
+                print(f"[ROSTER] [API] Got {len(df)} rows from API for {team_abbrev}")
             except Exception as e:
-                print(f"[ROSTER] [ERROR] Failed to get data frames: {e}")
-                return pd.DataFrame()
+                error_msg = f"Failed to get data frames from API response for {team_abbrev}: {str(e)}"
+                print(f"[ROSTER] [ERROR] {error_msg}")
+                raise Exception(error_msg)
         else:
             print(f"[ROSTER] [API] Using direct API call (no wrapper)...")
-            roster = commonteamroster.CommonTeamRoster(team_id=team_id, season=season)
-            df = roster.get_data_frames()[0]
-            print(f"[ROSTER] [API] Got {len(df)} rows from API")
+            try:
+                roster = commonteamroster.CommonTeamRoster(team_id=team_id, season=season)
+                df = roster.get_data_frames()[0]
+                print(f"[ROSTER] [API] Got {len(df)} rows from API for {team_abbrev}")
+            except Exception as e:
+                error_msg = f"Direct API call failed for {team_abbrev} ({season}): {str(e)}"
+                print(f"[ROSTER] [ERROR] {error_msg}")
+                raise Exception(error_msg)
 
         if not df.empty:
             players_list = []

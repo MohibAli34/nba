@@ -101,9 +101,10 @@ def fetch_game_data_internal(
             game_data['home_roster'] = home_roster.to_dict('records')
             print(f"[SUCCESS] Loaded {len(home_roster)} players for {home_team}")
         else:
-            error_msg = f"Failed to fetch {home_team} roster for both {cur_season} and {prev_season}"
+            error_msg = f"Failed to fetch {home_team} roster - API returned empty data for both {cur_season} and {prev_season} seasons"
             print(f"[ERROR] {error_msg}")
             roster_errors.append(error_msg)
+            game_data['_home_roster_error'] = error_msg
     except Exception as e:
         error_msg = f"Exception fetching {home_team} roster: {str(e)}"
         print(f"[ERROR] {error_msg}")
@@ -122,9 +123,10 @@ def fetch_game_data_internal(
             game_data['away_roster'] = away_roster.to_dict('records')
             print(f"[SUCCESS] Loaded {len(away_roster)} players for {away_team}")
         else:
-            error_msg = f"Failed to fetch {away_team} roster for both {cur_season} and {prev_season}"
+            error_msg = f"Failed to fetch {away_team} roster - API returned empty data for both {cur_season} and {prev_season} seasons"
             print(f"[ERROR] {error_msg}")
             roster_errors.append(error_msg)
+            game_data['_away_roster_error'] = error_msg
     except Exception as e:
         error_msg = f"Exception fetching {away_team} roster: {str(e)}"
         print(f"[ERROR] {error_msg}")

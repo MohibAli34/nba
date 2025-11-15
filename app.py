@@ -2008,27 +2008,67 @@ No game is selected yet — choose one in the sidebar to start.
     cache_key = game_data.get('_cache_key', '')
     fetch_time = game_data.get('_fetch_time', 0)
     roster_errors = game_data.get('_roster_errors', [])
+    timeout_flag = game_data.get('_timeout', False)
+    
+    # Store errors before removing metadata
+    error_details = {
+        'cache_status': cache_status,
+        'roster_errors': roster_errors,
+        'timeout': timeout_flag,
+        'cache_key': cache_key,
+        'fetch_time': fetch_time,
+    }
     
     if cache_status == 'HIT':
         cache_status_placeholder.success(f"✅ **Data loaded from cache** (instant) | Key: `{cache_key}`")
     elif cache_status == 'MISS':
         cache_status_placeholder.warning(f"🔄 **Data fetched from API** ({fetch_time:.1f}s) | Saved to cache: `{cache_key}`")
-    elif cache_status == 'ERROR' or cache_status == 'TIMEOUT':
+    elif cache_status == 'ERROR' or cache_status == 'TIMEOUT' or cache_status == 'EMPTY' or timeout_flag:
         cache_status_placeholder.error(f"❌ **Data load failed** | Status: {cache_status}")
-        if roster_errors:
-            with cache_status_placeholder.expander("🔍 View Error Details", expanded=True):
+        # Always show error details in an expandable section
+        with st.expander("🔍 View Error Details", expanded=True):
+            st.error("**Root Cause:** Failed to load player roster data from NBA API")
+            
+            if roster_errors:
+                st.markdown("**Roster Fetching Errors:**")
                 for error in roster_errors:
                     st.error(f"• {error}")
-                st.info("💡 **Troubleshooting:** Check Streamlit Cloud logs for detailed API errors. The NBA API might be temporarily unavailable.")
+            
+            if timeout_flag:
+                st.error("• Request timed out after 2 minutes")
+            
+            if cache_status == 'TIMEOUT':
+                st.error("• API calls took too long (> 2 minutes)")
+            
+            st.markdown("**Possible Causes:**")
+            st.markdown("""
+            1. **NBA API is temporarily unavailable** - Check [NBA API Status](https://stats.nba.com)
+            2. **Network issues on Streamlit Cloud** - May be temporary
+            3. **API rate limiting** - Too many requests
+            4. **Team abbreviations mismatch** - Check if team codes are correct
+            
+            **Next Steps:**
+            - Check Streamlit Cloud logs (Manage app → Logs) for detailed error messages
+            - Try refreshing the page in a few minutes
+            - Try selecting a different game
+            - Check if NBA API is working: https://stats.nba.com
+            """)
+            
+            # Show team abbreviations being used
+            st.markdown(f"**Debug Info:**")
+            st.code(f"Home Team: {home_team}\nAway Team: {away_team}\nCache Key: {cache_key}\nFetch Time: {fetch_time:.1f}s", language="text")
     else:
         cache_status_placeholder.info(f"ℹ️ **Data loaded** | Status: {cache_status}")
         if roster_errors:
-            cache_status_placeholder.warning(f"⚠️ Some roster data failed to load. Check logs for details.")
+            with st.expander("⚠️ Roster Errors", expanded=False):
+                for error in roster_errors:
+                    st.warning(f"• {error}")
     
-    # Remove cache metadata before processing
+    # Remove cache metadata before processing (but keep errors if needed)
     game_data.pop('_cache_status', None)
     game_data.pop('_cache_key', None)
     game_data.pop('_fetch_time', None)
+    game_data.pop('_timeout', None)
     
     # Extract cached data (handle both DataFrame and dict formats)
     home_roster = game_data.get('home_roster')
