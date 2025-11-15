@@ -1956,16 +1956,31 @@ No game is selected yet — choose one in the sidebar to start.
         team_stats = pd.DataFrame(team_stats if team_stats else [])
 
     if home_roster.empty and away_roster.empty:
-        st.error("Couldn't load rosters for this matchup.")
-        return
+        st.warning("⚠️ Couldn't load rosters for this matchup. The app will continue but may have limited functionality.")
+        # Create empty roster so app doesn't crash
+        combined_roster = pd.DataFrame(columns=["player_id", "full_name", "team_abbrev", "is_starter"])
+    else:
+        try:
+            combined_roster = pd.concat([home_roster, away_roster], ignore_index=True)
+            combined_roster = combined_roster.drop_duplicates(subset=["player_id"])
+        except Exception as e:
+            print(f"[ERROR] Failed to combine rosters: {e}")
+            st.warning("⚠️ Error combining rosters. Using available data.")
+            combined_roster = home_roster if not home_roster.empty else away_roster
+            if combined_roster.empty:
+                combined_roster = pd.DataFrame(columns=["player_id", "full_name", "team_abbrev", "is_starter"])
 
-    combined_roster = pd.concat([home_roster, away_roster], ignore_index=True)
-    combined_roster = combined_roster.drop_duplicates(subset=["player_id"])
-
-    # Mark starters
-    combined_roster["is_starter"] = combined_roster["full_name"].apply(
-        lambda name: is_player_starter(name, starters_dict)
-    )
+    # Mark starters with error handling
+    try:
+        if "full_name" in combined_roster.columns:
+            combined_roster["is_starter"] = combined_roster["full_name"].apply(
+                lambda name: is_player_starter(name, starters_dict) if pd.notna(name) else False
+            )
+        else:
+            combined_roster["is_starter"] = False
+    except Exception as e:
+        print(f"[WARN] Failed to mark starters: {e}")
+        combined_roster["is_starter"] = False
     
     # Filter to only starters if toggle is on
     if show_only_starters:
@@ -2009,179 +2024,278 @@ No game is selected yet — choose one in the sidebar to start.
     # ---
     # STAGE 1: DATA COLLECTION LOOP
     # We only build the data lists here. NO st.write, st.button, or UI.
+    # Each player is wrapped in try/except so one failure doesn't stop everything.
     # ---
     for idx, prow in combined_roster.iterrows():
-        status_placeholder.write(
-            f"Loading {idx+1}/{total_players} players..."
-        )
-        
-        player_name = prow["full_name"]
-        pid = prow["player_id"]
-        team_abbrev = prow["team_abbrev"]
-        opponent_abbrev = away_team if team_abbrev == home_team else home_team
+        try:
+            status_placeholder.write(
+                f"Loading {idx+1}/{total_players} players..."
+            )
+            
+            # Safely extract player data with defaults
+            player_name = prow.get("full_name", "Unknown Player")
+            pid = prow.get("player_id", None)
+            team_abbrev = prow.get("team_abbrev", home_team)
+            
+            if pd.isna(player_name) or player_name == "":
+                print(f"[WARN] Skipping player {idx} - missing name")
+                continue
+                
+            opponent_abbrev = away_team if team_abbrev == home_team else home_team
 
-        if pd.isna(pid):
-            fallback_id = hashlib.md5(f"{player_name}_{team_abbrev}".encode()).hexdigest()[:8]
-            player_identifier = f"fallback_{fallback_id}"
-        else:
-            player_identifier = str(pid)
-
-        # position
-        player_pos = get_player_position(pid, season=prev_season)
-
-        # logs
-        current_logs = get_player_game_logs_cached_db(
-            pid, player_name, season=cur_season
-        )
-        prior_logs = get_player_game_logs_cached_db(
-            pid, player_name, season=prev_season
-        )
-
-        # opponent recent form
-        opponent_recent = get_opponent_recent_games(
-            opponent_abbrev,
-            season=prev_season,
-            last_n=10
-        )
-
-        # head-to-head
-        h2h_history = get_head_to_head_history(
-            pid,
-            opponent_abbrev,
-            seasons=[prev_season, "2023-24"]
-        )
-
-        # defense rank vs position
-        opp_def_rank_info = get_team_defense_rank_vs_position(
-            opponent_abbrev,
-            player_pos,
-            def_vs_pos_df
-        )
-
-        # features for model
-        feat = build_enhanced_feature_vector(
-            current_logs,
-            opponent_abbrev,
-            team_stats,
-            prior_season_logs=prior_logs,
-            opponent_recent_games=opponent_recent,
-            head_to_head_games=h2h_history,
-            player_position=player_pos
-        )
-
-        # model projection (stat-based)
-        if stat_code == "DD":
-            pred_val = model_obj.predict_double_double(feat) * 100.0  # %
-            proj_display = f"{pred_val:.1f}%"
-        else:
-            pred_val = model_obj.predict(feat, stat_code)
-            proj_display = f"{pred_val:.1f}"
-
-        # sportsbook line for THIS player/stat from FanDuel odds
-        if stat_code == "DD":
-            fd_line_val = None
-        else:
-            fd_info = get_player_fanduel_line(player_name, stat_code, odds_data)
-            fd_line_val = fd_info["line"] if fd_info else None
-
-        # compute edge + hit rate
-        if stat_code == "DD":
-            hit_pct_val = None
-            edge_str = "—"
-            rec_text = "Most books don't post DD lines"
-            ou_short = "—"
-        else:
-            if fd_line_val is not None:
-                hit_pct_val = calc_hit_rate(
-                    current_logs if not current_logs.empty else prior_logs,
-                    stat_code,
-                    fd_line_val,
-                    window=10
-                )
-                edge_str, rec_text, ou_short = calc_edge(pred_val, fd_line_val)
+            if pd.isna(pid) or pid is None:
+                fallback_id = hashlib.md5(f"{player_name}_{team_abbrev}".encode()).hexdigest()[:8]
+                player_identifier = f"fallback_{fallback_id}"
             else:
+                player_identifier = str(pid)
+
+            # position - with error handling
+            try:
+                player_pos = get_player_position(pid, season=prev_season) if pid else "UNK"
+            except Exception as e:
+                print(f"[WARN] Failed to get position for {player_name}: {e}")
+                player_pos = "UNK"
+
+            # logs - with error handling
+            try:
+                current_logs = get_player_game_logs_cached_db(
+                    pid, player_name, season=cur_season
+                ) if pid else pd.DataFrame()
+            except Exception as e:
+                print(f"[WARN] Failed to get current logs for {player_name}: {e}")
+                current_logs = pd.DataFrame()
+            
+            try:
+                prior_logs = get_player_game_logs_cached_db(
+                    pid, player_name, season=prev_season
+                ) if pid else pd.DataFrame()
+            except Exception as e:
+                print(f"[WARN] Failed to get prior logs for {player_name}: {e}")
+                prior_logs = pd.DataFrame()
+
+            # opponent recent form - with error handling
+            try:
+                opponent_recent = get_opponent_recent_games(
+                    opponent_abbrev,
+                    season=prev_season,
+                    last_n=10
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to get opponent recent games: {e}")
+                opponent_recent = pd.DataFrame()
+
+            # head-to-head - with error handling
+            try:
+                h2h_history = get_head_to_head_history(
+                    pid,
+                    opponent_abbrev,
+                    seasons=[prev_season, "2023-24"]
+                ) if pid else pd.DataFrame()
+            except Exception as e:
+                print(f"[WARN] Failed to get H2H history for {player_name}: {e}")
+                h2h_history = pd.DataFrame()
+
+            # defense rank vs position - with error handling
+            try:
+                opp_def_rank_info = get_team_defense_rank_vs_position(
+                    opponent_abbrev,
+                    player_pos,
+                    def_vs_pos_df
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to get defense rank: {e}")
+                opp_def_rank_info = {"rank": 15, "rating": "Average"}
+
+            # features for model - with error handling
+            try:
+                feat = build_enhanced_feature_vector(
+                    current_logs,
+                    opponent_abbrev,
+                    team_stats,
+                    prior_season_logs=prior_logs,
+                    opponent_recent_games=opponent_recent,
+                    head_to_head_games=h2h_history,
+                    player_position=player_pos
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to build features for {player_name}: {e}")
+                # Create default feature vector
+                feat = build_enhanced_feature_vector(
+                    pd.DataFrame(),
+                    opponent_abbrev,
+                    pd.DataFrame(),
+                    prior_season_logs=pd.DataFrame(),
+                    opponent_recent_games=pd.DataFrame(),
+                    head_to_head_games=pd.DataFrame(),
+                    player_position=player_pos
+                )
+
+            # model projection (stat-based) - with error handling
+            try:
+                if stat_code == "DD":
+                    pred_val = model_obj.predict_double_double(feat) * 100.0  # %
+                    proj_display = f"{pred_val:.1f}%"
+                else:
+                    pred_val = model_obj.predict(feat, stat_code)
+                    proj_display = f"{pred_val:.1f}"
+            except Exception as e:
+                print(f"[WARN] Failed to predict for {player_name}: {e}")
+                pred_val = 0.0
+                proj_display = "N/A"
+
+            # sportsbook line for THIS player/stat from FanDuel odds - with error handling
+            try:
+                if stat_code == "DD":
+                    fd_line_val = None
+                else:
+                    fd_info = get_player_fanduel_line(player_name, stat_code, odds_data)
+                    fd_line_val = fd_info.get("line") if fd_info and isinstance(fd_info, dict) else None
+            except Exception as e:
+                print(f"[WARN] Failed to get FanDuel line for {player_name}: {e}")
+                fd_line_val = None
+
+            # compute edge + hit rate - with error handling
+            try:
+                if stat_code == "DD":
+                    hit_pct_val = None
+                    edge_str = "—"
+                    rec_text = "Most books don't post DD lines"
+                    ou_short = "—"
+                else:
+                    if fd_line_val is not None and pred_val is not None:
+                        hit_pct_val = calc_hit_rate(
+                            current_logs if not current_logs.empty else prior_logs,
+                            stat_code,
+                            fd_line_val,
+                            window=10
+                        )
+                        edge_str, rec_text, ou_short = calc_edge(pred_val, fd_line_val)
+                    else:
+                        hit_pct_val = None
+                        edge_str, rec_text, ou_short = ("—", "No line", "—")
+            except Exception as e:
+                print(f"[WARN] Failed to calculate edge/hit rate for {player_name}: {e}")
                 hit_pct_val = None
-                edge_str, rec_text, ou_short = ("—", "No line", "—")
+                edge_str, rec_text, ou_short = ("—", "Error", "—")
 
-        # Opp Def Rank vs Position w/ emoji color
-        rank_num = opp_def_rank_info.get("rank", 15)
-        rating_txt = opp_def_rank_info.get("rating", "Average")
-        d_emoji = defense_emoji(rank_num)
-        opp_def_display = f"{d_emoji} #{rank_num} ({rating_txt})"
+            # Opp Def Rank vs Position w/ emoji color - with error handling
+            try:
+                rank_num = opp_def_rank_info.get("rank", 15)
+                rating_txt = opp_def_rank_info.get("rating", "Average")
+                d_emoji = defense_emoji(rank_num)
+                opp_def_display = f"{d_emoji} #{rank_num} ({rating_txt})"
+            except Exception as e:
+                print(f"[WARN] Failed to format defense display: {e}")
+                opp_def_display = "🟰 #15 (Average)"
 
-        # Check if player is starter and add ⭐️
-        roster_row = combined_roster[combined_roster["full_name"] == player_name]
-        is_starter = roster_row.iloc[0].get("is_starter", False) == True if not roster_row.empty else False
-        player_display_name = f"⭐️ {player_name}" if is_starter else player_name
-        
-        # Get or initialize adjusted line from session state (safely)
-        # If fd_line_val is None, use 0.0 as the default
-        default_line = fd_line_val if fd_line_val is not None else 0.0
-        current_line_table = get_adjusted_line_value(player_identifier, stat_code, default_line)
-        
-        logs_for_hits = current_logs if not current_logs.empty else prior_logs
+            # Check if player is starter and add ⭐️ - with error handling
+            try:
+                roster_row = combined_roster[combined_roster["full_name"] == player_name]
+                is_starter = roster_row.iloc[0].get("is_starter", False) == True if not roster_row.empty and len(roster_row) > 0 else False
+                player_display_name = f"⭐️ {player_name}" if is_starter else player_name
+            except Exception as e:
+                print(f"[WARN] Failed to check starter status for {player_name}: {e}")
+                is_starter = False
+                player_display_name = player_name
+            
+            # Get or initialize adjusted line from session state (safely)
+            # If fd_line_val is None, use 0.0 as the default
+            try:
+                default_line = fd_line_val if fd_line_val is not None else 0.0
+                current_line_table = get_adjusted_line_value(player_identifier, stat_code, default_line)
+            except Exception as e:
+                print(f"[WARN] Failed to get adjusted line for {player_name}: {e}")
+                current_line_table = fd_line_val if fd_line_val is not None else 0.0
+            
+            logs_for_hits = current_logs if not current_logs.empty else prior_logs
 
-        hit_rate_l5 = hit_rate_l10 = hit_rate_season = None
-        if stat_code != "DD" and pred_val is not None and logs_for_hits is not None and not logs_for_hits.empty:
-            hit_rate_l5 = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val, window=5, denominator=5)
-            hit_rate_l10 = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val, window=10, denominator=20)
-            hit_rate_season = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val)
+            hit_rate_l5 = hit_rate_l10 = hit_rate_season = None
+            try:
+                if stat_code != "DD" and pred_val is not None and logs_for_hits is not None and not logs_for_hits.empty:
+                    hit_rate_l5 = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val, window=5, denominator=5)
+                    hit_rate_l10 = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val, window=10, denominator=20)
+                    hit_rate_season = calc_hit_rate_vs_projection(logs_for_hits, stat_code, pred_val)
+            except Exception as e:
+                print(f"[WARN] Failed to calculate hit rates for {player_name}: {e}")
 
-        if current_line_table is not None and stat_code != "DD":
-            adjusted_edge_str_table, _, adjusted_ou_short_table = calc_edge(pred_val, current_line_table)
-        else:
-            adjusted_edge_str_table = edge_str
-            adjusted_ou_short_table = ou_short
-        
-        # Generate a stable unique ID for this player/stat combination
-        stable_unique_id = get_or_create_stable_id(player_identifier, stat_code)
+            try:
+                if current_line_table is not None and stat_code != "DD" and pred_val is not None:
+                    adjusted_edge_str_table, _, adjusted_ou_short_table = calc_edge(pred_val, current_line_table)
+                else:
+                    adjusted_edge_str_table = edge_str
+                    adjusted_ou_short_table = ou_short
+            except Exception as e:
+                print(f"[WARN] Failed to calculate adjusted edge for {player_name}: {e}")
+                adjusted_edge_str_table = edge_str
+                adjusted_ou_short_table = ou_short
+            
+            # Generate a stable unique ID for this player/stat combination
+            try:
+                stable_unique_id = get_or_create_stable_id(player_identifier, stat_code)
+            except Exception as e:
+                print(f"[WARN] Failed to generate stable ID for {player_name}: {e}")
+                stable_unique_id = f"{player_identifier}_{stat_code}"
 
-        # Store data for interactive table row
-        table_row_data = {
-            "player_name": player_name,
-            "player_display_name": player_display_name,
-            "player_identifier": player_identifier,
-            "stable_id": stable_unique_id,
-            "team_abbrev": team_abbrev,
-            "team_pos": f"{team_abbrev} · {player_pos}",
-            "proj": proj_display,
-            "proj_value": pred_val,  # Actual numeric value for calculations
-            "fd_line_val": fd_line_val,
-            "current_line": current_line_table,
-            "hit_rate": hit_rate_l10 if hit_rate_l10 is not None else hit_pct_val,
-            "hit_rate_l5": hit_rate_l5,
-            "hit_rate_l10": hit_rate_l10,
-            "hit_rate_season": hit_rate_season,
-            "ou_short": adjusted_ou_short_table,
-            "opp_def": opp_def_display,
-            "stat_code": stat_code,
-            "current_logs": current_logs,
-            "prior_logs": prior_logs,
-        }
-        table_rows.append(table_row_data)
+            # Store data for interactive table row
+            try:
+                table_row_data = {
+                    "player_name": player_name,
+                    "player_display_name": player_display_name,
+                    "player_identifier": player_identifier,
+                    "stable_id": stable_unique_id,
+                    "team_abbrev": team_abbrev,
+                    "team_pos": f"{team_abbrev} · {player_pos}",
+                    "proj": proj_display,
+                    "proj_value": pred_val,  # Actual numeric value for calculations
+                    "fd_line_val": fd_line_val,
+                    "current_line": current_line_table,
+                    "hit_rate": hit_rate_l10 if hit_rate_l10 is not None else hit_pct_val,
+                    "hit_rate_l5": hit_rate_l5,
+                    "hit_rate_l10": hit_rate_l10,
+                    "hit_rate_season": hit_rate_season,
+                    "ou_short": adjusted_ou_short_table,
+                    "opp_def": opp_def_display,
+                    "stat_code": stat_code,
+                    "current_logs": current_logs,
+                    "prior_logs": prior_logs,
+                }
+                table_rows.append(table_row_data)
+            except Exception as e:
+                print(f"[ERROR] Failed to create table row for {player_name}: {e}")
+                continue  # Skip this player
 
-        # prepare data for expander
-        pdata = {
-            "player_name": player_name,
-            "team_abbrev": team_abbrev,
-            "player_pos": player_pos,
-            "opponent_abbrev": opponent_abbrev,
-            "current_logs": current_logs,
-            "prior_logs": prior_logs,
-            "h2h_history": h2h_history,
-            "opp_def_rank": opp_def_rank_info,
-            "features": feat,
-            "prediction": pred_val,
-            "stat_code": stat_code,
-            "stat_display": stat_display,
-            "player_id": player_identifier,
-            "stable_unique_id": stable_unique_id, 
-            "fd_line_val": fd_line_val,
-            "hit_pct_val": hit_pct_val,
-            "edge_str": edge_str,
-            "rec_text": rec_text,
-        }
-        player_payloads.append(pdata)
+            # prepare data for expander
+            try:
+                pdata = {
+                    "player_name": player_name,
+                    "team_abbrev": team_abbrev,
+                    "player_pos": player_pos,
+                    "opponent_abbrev": opponent_abbrev,
+                    "current_logs": current_logs,
+                    "prior_logs": prior_logs,
+                    "h2h_history": h2h_history,
+                    "opp_def_rank": opp_def_rank_info,
+                    "features": feat,
+                    "prediction": pred_val,
+                    "stat_code": stat_code,
+                    "stat_display": stat_display,
+                    "player_id": player_identifier,
+                    "stable_unique_id": stable_unique_id, 
+                    "fd_line_val": fd_line_val,
+                    "hit_pct_val": hit_pct_val,
+                    "edge_str": edge_str,
+                    "rec_text": rec_text,
+                }
+                player_payloads.append(pdata)
+            except Exception as e:
+                print(f"[ERROR] Failed to create player payload for {player_name}: {e}")
+                # Don't skip - continue without this player's detail data
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to process player {idx} ({player_name if 'player_name' in locals() else 'unknown'}): {e}")
+            import traceback
+            traceback.print_exc()
+            continue  # Skip this player and continue with the next one
     
     # End of loop
     status_placeholder.success(f"✅ Loaded all {total_players} players. Rendering UI...")
@@ -2482,8 +2596,12 @@ No game is selected yet — choose one in the sidebar to start.
 
         rendered_combinations.add(combo_key)
 
-        roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
-        player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty else False
+        try:
+            roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
+            player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty and len(roster_match) > 0 else False
+        except Exception as e:
+            print(f"[WARN] Failed to check starter status: {e}")
+            player_is_starter = False
 
         expander_title = f"{'⭐️ ' if player_is_starter else ''}{info['player_name']} ({info['team_abbrev']} · {info['player_pos']})"
 
