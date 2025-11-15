@@ -2155,13 +2155,19 @@ No game is selected yet — choose one in the sidebar to start.
                 f"Loading {idx+1}/{total_players} players..."
             )
             
-            # Safely extract player data with defaults
-            player_name = prow.get("full_name", "Unknown Player")
-            pid = prow.get("player_id", None)
-            team_abbrev = prow.get("team_abbrev", home_team)
+            # Safely extract player data with defaults - check if column exists
+            if isinstance(prow, pd.Series):
+                player_name = prow.get("full_name", "Unknown Player") if "full_name" in prow.index else "Unknown Player"
+                pid = prow.get("player_id", None) if "player_id" in prow.index else None
+                team_abbrev = prow.get("team_abbrev", home_team) if "team_abbrev" in prow.index else home_team
+            else:
+                # Fallback for dict-like access
+                player_name = prow.get("full_name", "Unknown Player") if hasattr(prow, 'get') else "Unknown Player"
+                pid = prow.get("player_id", None) if hasattr(prow, 'get') else None
+                team_abbrev = prow.get("team_abbrev", home_team) if hasattr(prow, 'get') else home_team
             
-            if pd.isna(player_name) or player_name == "":
-                print(f"[WARN] Skipping player {idx} - missing name")
+            if pd.isna(player_name) or player_name == "" or player_name == "Unknown Player":
+                print(f"[WARN] Skipping player {idx} - missing or invalid name: {player_name}")
                 continue
                 
             opponent_abbrev = away_team if team_abbrev == home_team else home_team
@@ -2313,8 +2319,11 @@ No game is selected yet — choose one in the sidebar to start.
 
             # Check if player is starter and add ⭐️ - with error handling
             try:
-                roster_row = combined_roster[combined_roster["full_name"] == player_name]
-                is_starter = roster_row.iloc[0].get("is_starter", False) == True if not roster_row.empty and len(roster_row) > 0 else False
+                if not combined_roster.empty and "full_name" in combined_roster.columns:
+                    roster_row = combined_roster[combined_roster["full_name"] == player_name]
+                    is_starter = roster_row.iloc[0].get("is_starter", False) == True if not roster_row.empty and len(roster_row) > 0 else False
+                else:
+                    is_starter = False
                 player_display_name = f"⭐️ {player_name}" if is_starter else player_name
             except Exception as e:
                 print(f"[WARN] Failed to check starter status for {player_name}: {e}")
@@ -2720,8 +2729,11 @@ No game is selected yet — choose one in the sidebar to start.
         rendered_combinations.add(combo_key)
 
         try:
-            roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
-            player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty and len(roster_match) > 0 else False
+            if not combined_roster.empty and "full_name" in combined_roster.columns:
+                roster_match = combined_roster[combined_roster["full_name"] == info["player_name"]]
+                player_is_starter = roster_match.iloc[0].get("is_starter", False) == True if not roster_match.empty and len(roster_match) > 0 else False
+            else:
+                player_is_starter = False
         except Exception as e:
             print(f"[WARN] Failed to check starter status: {e}")
             player_is_starter = False
