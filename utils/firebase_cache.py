@@ -221,13 +221,19 @@ def get_cached_data(cache_key: str, max_age_hours: int = 24, timeout_seconds: fl
                 data_size = len(str(cached_data)) if cached_data else 0
                 print(f"[CACHE] [OK] Cache HIT for {cache_key} (age: {age}, size: {data_size} chars, fetched in {fetch_time:.3f}s)")
                 return cached_data
-            except (TypeError, ValueError) as e:
-                print(f"[CACHE] [ERROR] Error comparing cache age for {cache_key}: {e}")
+            except Exception as e:
+                # Catch ALL exceptions, including comparison errors
+                error_msg = str(e)
+                print(f"[CACHE] [ERROR] Error comparing cache age for {cache_key}: {error_msg}")
+                print(f"[CACHE] [ERROR] Exception type: {type(e).__name__}")
                 print(f"[CACHE] [ERROR] cached_time type: {type(cached_time)}, value: {cached_time}")
                 print(f"[CACHE] [ERROR] max_age_hours type: {type(max_age_hours)}, value: {max_age_hours}")
+                print(f"[CACHE] [ERROR] age type: {type(age) if 'age' in locals() else 'N/A'}")
+                print(f"[CACHE] [ERROR] max_age type: {type(max_age) if 'max_age' in locals() else 'N/A'}")
                 import traceback
                 traceback.print_exc()
-                # If we can't compare, assume cache is invalid
+                # If we can't compare, assume cache is invalid and return None
+                # This will force a fresh fetch from API
                 return None
         
         print(f"[CACHE] [WARN] No timestamp found in cache for {cache_key}")
