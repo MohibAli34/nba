@@ -3,9 +3,15 @@ NBA API wrapper with proper headers, retries, and timeout handling.
 This module configures nba_api to work better in cloud environments.
 """
 import time
-import requests
 from typing import Optional, Callable, Any
 from functools import wraps
+
+# Import requests with error handling
+try:
+    import requests
+except ImportError:
+    print("[WARN] requests library not found. Install with: pip install requests")
+    requests = None
 
 # NBA API headers that make requests look more browser-like
 NBA_HEADERS = {
@@ -32,6 +38,8 @@ _nba_session = None
 def get_nba_session():
     """Get or create a requests session configured for NBA API calls."""
     global _nba_session
+    if requests is None:
+        raise ImportError("requests library is required but not installed")
     if _nba_session is None:
         _nba_session = requests.Session()
         _nba_session.headers.update(NBA_HEADERS)
