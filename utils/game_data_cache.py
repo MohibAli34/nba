@@ -227,52 +227,72 @@ def get_cached_game_data(
         away_roster = cached_data.get('away_roster', [])
         
         # Check if both rosters are empty
-        if (not home_roster or (isinstance(home_roster, pd.DataFrame) and home_roster.empty) or 
-            (isinstance(home_roster, list) and len(home_roster) == 0)) and \
-           (not away_roster or (isinstance(away_roster, pd.DataFrame) and away_roster.empty) or 
-            (isinstance(away_roster, list) and len(away_roster) == 0)):
-            
+        home_roster_empty = not home_roster or (isinstance(home_roster, pd.DataFrame) and home_roster.empty) or (isinstance(home_roster, list) and len(home_roster) == 0)
+        away_roster_empty = not away_roster or (isinstance(away_roster, pd.DataFrame) and away_roster.empty) or (isinstance(away_roster, list) and len(away_roster) == 0)
+        
+        if home_roster_empty and away_roster_empty:
             print(f"[GAME_CACHE] [WARN] Cached data has empty rosters - attempting to refresh them...")
             
-            # Try to fetch rosters separately (in background, don't wait too long)
+            # Try to fetch rosters synchronously with timeout (don't wait too long)
             from .data_fetcher import get_players_by_team
             import threading
+            import time
             
-            def fetch_rosters_in_background():
+            roster_refresh_timeout = 30  # 30 seconds max to refresh rosters
+            roster_container = {'home': None, 'away': None, 'done': False}
+            
+            def fetch_rosters_with_timeout():
                 try:
                     # Try to fetch home roster
-                    print(f"[GAME_CACHE] [REFRESH] Attempting to fetch {home_team} roster...")
-                    home_roster_new = get_players_by_team(home_team, season=cur_season)
-                    if home_roster_new.empty:
-                        home_roster_new = get_players_by_team(home_team, season=prev_season)
-                    if not home_roster_new.empty:
-                        home_roster_new["team_abbrev"] = home_team
-                        cached_data['home_roster'] = home_roster_new.to_dict('records')
-                        print(f"[GAME_CACHE] [SUCCESS] Refreshed {home_team} roster with {len(home_roster_new)} players")
+                    if home_roster_empty:
+                        print(f"[GAME_CACHE] [REFRESH] Attempting to fetch {home_team} roster...")
+                        try:
+                            home_roster_new = get_players_by_team(home_team, season=cur_season)
+                            if home_roster_new.empty:
+                                home_roster_new = get_players_by_team(home_team, season=prev_season)
+                            if not home_roster_new.empty:
+                                home_roster_new["team_abbrev"] = home_team
+                                roster_container['home'] = home_roster_new.to_dict('records')
+                                cached_data['home_roster'] = roster_container['home']
+                                print(f"[GAME_CACHE] [SUCCESS] Refreshed {home_team} roster with {len(home_roster_new)} players")
+                        except Exception as e:
+                            print(f"[GAME_CACHE] [WARN] Failed to refresh {home_team} roster: {e}")
                     
                     # Try to fetch away roster
-                    print(f"[GAME_CACHE] [REFRESH] Attempting to fetch {away_team} roster...")
-                    away_roster_new = get_players_by_team(away_team, season=cur_season)
-                    if away_roster_new.empty:
-                        away_roster_new = get_players_by_team(away_team, season=prev_season)
-                    if not away_roster_new.empty:
-                        away_roster_new["team_abbrev"] = away_team
-                        cached_data['away_roster'] = away_roster_new.to_dict('records')
-                        print(f"[GAME_CACHE] [SUCCESS] Refreshed {away_team} roster with {len(away_roster_new)} players")
-                        
-                        # Update cache with refreshed rosters
+                    if away_roster_empty:
+                        print(f"[GAME_CACHE] [REFRESH] Attempting to fetch {away_team} roster...")
                         try:
-                            serializable_data = _prepare_for_storage(cached_data)
-                            firebase_cache.set_cached_data(cache_key, serializable_data)
-                            print(f"[GAME_CACHE] [SAVE] Updated cache with refreshed rosters")
+                            away_roster_new = get_players_by_team(away_team, season=cur_season)
+                            if away_roster_new.empty:
+                                away_roster_new = get_players_by_team(away_team, season=prev_season)
+                            if not away_roster_new.empty:
+                                away_roster_new["team_abbrev"] = away_team
+                                roster_container['away'] = away_roster_new.to_dict('records')
+                                cached_data['away_roster'] = roster_container['away']
+                                print(f"[GAME_CACHE] [SUCCESS] Refreshed {away_team} roster with {len(away_roster_new)} players")
                         except Exception as e:
-                            print(f"[GAME_CACHE] [WARN] Failed to update cache with refreshed rosters: {e}")
+                            print(f"[GAME_CACHE] [WARN] Failed to refresh {away_team} roster: {e}")
                 except Exception as e:
-                    print(f"[GAME_CACHE] [WARN] Failed to refresh rosters in background: {e}")
+                    print(f"[GAME_CACHE] [WARN] Failed to refresh rosters: {e}")
+                finally:
+                    roster_container['done'] = True
             
-            # Start refresh in background thread (non-blocking)
-            refresh_thread = threading.Thread(target=fetch_rosters_in_background, daemon=True)
+            # Start refresh in thread with timeout
+            refresh_thread = threading.Thread(target=fetch_rosters_with_timeout, daemon=True)
             refresh_thread.start()
+            refresh_thread.join(timeout=roster_refresh_timeout)
+            
+            # Update cache if we got any rosters
+            if roster_container['home'] or roster_container['away']:
+                try:
+                    serializable_data = _prepare_for_storage(cached_data)
+                    firebase_cache.set_cached_data(cache_key, serializable_data)
+                    print(f"[GAME_CACHE] [SAVE] Updated cache with refreshed rosters")
+                except Exception as e:
+                    print(f"[GAME_CACHE] [WARN] Failed to update cache with refreshed rosters: {e}")
+            
+            if not roster_container['done']:
+                print(f"[GAME_CACHE] [WARN] Roster refresh timed out after {roster_refresh_timeout}s - continuing with cached data")
         
         # Add cache status indicator
         cached_data['_cache_status'] = 'HIT'
